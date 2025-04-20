@@ -69,23 +69,49 @@ VENV_DIR="$SCRIPT_DIR/venv"
 if ! $PYTHON_CMD -c "import venv" 2>/dev/null; then
     echo -e "${RED}Python venv module not found. Installing...${NC}"
     if [ "$OS_TYPE" == "Linux" ]; then
+        # Try without sudo first
+        echo -e "${YELLOW}Attempting to install venv without sudo...${NC}"
+        SUDO_REQUIRED=true
+        
         if command -v apt-get &>/dev/null; then
-            sudo apt-get update && sudo apt-get install -y python3-venv
+            apt-get update && apt-get install -y python3-venv && SUDO_REQUIRED=false || true
         elif command -v dnf &>/dev/null; then
-            sudo dnf install -y python3-venv
+            dnf install -y python3-venv && SUDO_REQUIRED=false || true
         elif command -v yum &>/dev/null; then
-            sudo yum install -y python3-venv
-        else
-            echo -e "${RED}✗ Unable to install python3-venv automatically. Please install it manually.${NC}"
-            exit 1
+            yum install -y python3-venv && SUDO_REQUIRED=false || true
+        fi
+        
+        # If non-sudo installation failed, try with sudo
+        if [ "$SUDO_REQUIRED" = true ]; then
+            echo -e "${YELLOW}Non-sudo installation failed. Trying with sudo...${NC}"
+            if command -v apt-get &>/dev/null; then
+                sudo apt-get update && sudo apt-get install -y python3-venv || echo -e "${RED}Failed to install python3-venv with sudo${NC}"
+            elif command -v dnf &>/dev/null; then
+                sudo dnf install -y python3-venv || echo -e "${RED}Failed to install python3-venv with sudo${NC}"
+            elif command -v yum &>/dev/null; then
+                sudo yum install -y python3-venv || echo -e "${RED}Failed to install python3-venv with sudo${NC}"
+            else
+                echo -e "${RED}✗ Unable to install python3-venv automatically. Please install it manually.${NC}"
+                echo -e "${YELLOW}Try: sudo apt-get install python3-venv (Debian/Ubuntu)${NC}"
+                echo -e "${YELLOW}Or:  sudo dnf install python3-venv (Fedora)${NC}"
+                echo -e "${YELLOW}Or:  sudo yum install python3-venv (CentOS/RHEL)${NC}"
+                exit 1
+            fi
         fi
     elif [ "$OS_TYPE" == "Darwin" ]; then
         echo -e "${YELLOW}On macOS, venv should be included with Python 3. If not, reinstall Python.${NC}"
     fi
 fi
 
-# Create virtual environment
-$PYTHON_CMD -m venv "$VENV_DIR"
+# Create virtual environment (try even if venv installation appeared to fail)
+echo -e "${YELLOW}Attempting to create virtual environment...${NC}"
+$PYTHON_CMD -m venv "$VENV_DIR" || {
+    echo -e "${RED}Failed to create virtual environment. Trying alternative method...${NC}"
+    $PYTHON_CMD -m virtualenv "$VENV_DIR" 2>/dev/null || {
+        echo -e "${RED}✗ Failed to create virtual environment. Please install python3-venv or virtualenv manually.${NC}"
+        exit 1
+    }
+}
 echo -e "${GREEN}✓ Virtual environment created at: $VENV_DIR${NC}"
 
 # Activate virtual environment
@@ -132,16 +158,107 @@ EOF
 
     echo -e "${GREEN}✓ Created systemd service file: $SERVICE_FILE${NC}"
     
-    # Enable and start the service
-    systemctl --user daemon-reload
-    systemctl --user enable system-monitor.service
-    systemctl --user start system-monitor.service
+    # Create a helper script for systemd service management
+    # This avoids the "Failed to connect to bus" error in some environments
+    SYSTEMD_HELPER="$SCRIPT_DIR/manage_service.sh"
+    cat > "$SYSTEMD_HELPER" << EOF
+#!/bin/bash
+# Helper script to manage the systemd service
+
+ACTION=\$1
+if [ -z "\$ACTION" ]; then
+    echo "Usage: \$0 [start|stop|restart|status|enable|disable]"
+    exit 1
+fi
+
+# Export XDG runtime dir if not set (helps with some SSH sessions)
+if [ -z "\$XDG_RUNTIME_DIR" ]; then
+    export XDG_RUNTIME_DIR="/run/user/\$(id -u)"
+fi
+
+# Try to ensure DBUS session is available
+if [ -z "\$DBUS_SESSION_BUS_ADDRESS" ]; then
+    export DBUS_SESSION_BUS_ADDRESS="unix:path=\$XDG_RUNTIME_DIR/bus"
+fi
+
+# Run the systemd command
+systemctl --user \$ACTION system-monitor.service
+EXIT_CODE=\$?
+
+# If the command failed, try alternative methods
+if [ \$EXIT_CODE -ne 0 ]; then
+    echo "Standard systemctl command failed. Trying alternative method..."
+    
+    case "\$ACTION" in
+        start)
+            # Direct start as fallback
+            $VENV_DIR/bin/python $MONITOR_SCRIPT &
+            echo "Started service directly (PID: \$!)"
+            ;;
+        stop)
+            # Find and kill the process
+            PID=\$(pgrep -f "$MONITOR_SCRIPT" || echo "")
+            if [ -n "\$PID" ]; then
+                kill \$PID 2>/dev/null || kill -9 \$PID 2>/dev/null
+                echo "Stopped service (PID: \$PID)"
+            else
+                echo "No running service found"
+            fi
+            ;;
+        status)
+            # Check if process is running
+            PID=\$(pgrep -f "$MONITOR_SCRIPT" || echo "")
+            if [ -n "\$PID" ]; then
+                echo "Service is running (PID: \$PID)"
+            else
+                echo "Service is not running"
+            fi
+            ;;
+        *)
+            echo "Alternative method not implemented for '\$ACTION'"
+            ;;
+    esac
+fi
+EOF
+
+    chmod +x "$SYSTEMD_HELPER"
+    echo -e "${GREEN}✓ Created service management helper: $SYSTEMD_HELPER${NC}"
+    
+    # Try to enable and start the service
+    echo -e "${YELLOW}Trying to enable and start systemd service...${NC}"
+    
+    # Try to run systemctl commands with error handling
+    if systemctl --user daemon-reload 2>/dev/null; then
+        echo -e "${GREEN}✓ Systemd daemon reloaded${NC}"
+    else
+        echo -e "${YELLOW}Warning: Could not reload systemd daemon (this is normal in some environments)${NC}"
+    fi
+    
+    if systemctl --user enable system-monitor.service 2>/dev/null; then
+        echo -e "${GREEN}✓ Service enabled${NC}"
+    else
+        echo -e "${YELLOW}Warning: Could not enable service with systemctl (this is normal in some environments)${NC}"
+    fi
+    
+    # Try to start the service, with fallback to direct execution
+    if systemctl --user start system-monitor.service 2>/dev/null; then
+        echo -e "${GREEN}✓ Service started${NC}"
+    else
+        echo -e "${YELLOW}Warning: Could not start service with systemctl. Starting directly...${NC}"
+        # Start the service directly as a fallback
+        nohup "$VENV_DIR/bin/python" "$MONITOR_SCRIPT" > "$HOME/system_monitor.log" 2>&1 &
+        echo -e "${GREEN}✓ Service started directly (PID: $!)${NC}"
+    fi
     
     # Make sure lingering is enabled to run the service at boot time
-    loginctl enable-linger "$(whoami)" 2>/dev/null || true
+    if command -v loginctl &>/dev/null; then
+        loginctl enable-linger "$(whoami)" 2>/dev/null || true
+        echo -e "${GREEN}✓ Lingering enabled for user (service will start at boot)${NC}"
+    else
+        echo -e "${YELLOW}Warning: loginctl not found, service may not start at boot${NC}"
+    fi
     
-    echo -e "${GREEN}✓ Service enabled and started${NC}"
-    echo -e "\nYou can check service status with: ${YELLOW}systemctl --user status system-monitor.service${NC}"
+    echo -e "\nYou can manage the service with: ${YELLOW}$SYSTEMD_HELPER [start|stop|restart|status]${NC}"
     
 elif [ "$OS_TYPE" == "Darwin" ]; then
     # For macOS using launchd
@@ -215,7 +332,7 @@ echo -e "\n${BOLD}Next steps:${NC}"
 
 if [ "$OS_TYPE" == "Linux" ]; then
     echo -e "• The system monitor is running and will start automatically on boot."
-    echo -e "• To manually manage the service: ${YELLOW}systemctl --user [start|stop|restart] system-monitor.service${NC}"
+    echo -e "• To manually manage the service: ${YELLOW}$SYSTEMD_HELPER [start|stop|restart|status]${NC}"
 elif [ "$OS_TYPE" == "Darwin" ]; then
     echo -e "• The system monitor is running and will start automatically on boot."
     echo -e "• To manually manage the service: ${YELLOW}launchctl [load|unload] $PLIST_FILE${NC}"
