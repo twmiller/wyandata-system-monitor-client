@@ -1,4 +1,4 @@
-# system_monitor_client.py
+sudo apt-get install lm-sensors ipmitool# system_monitor_client.py
 
 import asyncio
 import websockets
@@ -505,70 +505,63 @@ async def collect_metrics():
         if hasattr(psutil, "sensors_temperatures"):
             try:
                 temps = psutil.sensors_temperatures()
-                for chip, sensors in temps.items():
-                    for i, sensor in enumerate(sensors):
-                        metrics[f"temp_{chip}_{i}"] = {
-                            "value": sensor.current,
-                            "unit": "°C",
-                            "data_type": "FLOAT",
-                            "category": "TEMPERATURE",
-                            "label": sensor.label if hasattr(sensor, 'label') else f"{chip}_{i}"
-                        }
-            except:
-                pass
-        
-        # Add AMD GPU metrics if available on Linux
-        if platform.system() == 'Linux':
-            try:
-                # Check if we have an AMD GPU by looking at the sysfs path
-                amd_path = '/sys/class/drm/card0/device/hwmon'
-                if os.path.exists(amd_path):
-                    hwmon_dirs = os.listdir(amd_path)
-                    if hwmon_dirs:
-                        hwmon_path = os.path.join(amd_path, hwmon_dirs[0])
-                        
-                        # GPU temperature
-                        temp_path = os.path.join(hwmon_path, 'temp1_input')
-                        if os.path.exists(temp_path):
-                            with open(temp_path, 'r') as f:
-                                gpu_temp = int(f.read().strip()) / 1000.0  # Convert from millidegrees to degrees
-                                metrics["gpu_temperature"] = {
-                                    "value": gpu_temp,
-                                    "unit": "°C",
-                                    "data_type": "FLOAT",
-                                    "category": "GPU"
-                                }
-                        
-                        # GPU utilization
-                        for metric in ['load', 'vddgfx', 'power1_average']:
-                            metric_path = os.path.join(hwmon_path, f'{metric}_input')
-                            if os.path.exists(metric_path):
-                                with open(metric_path, 'r') as f:
-                                    value = int(f.read().strip())
-                                    
-                                    if 'load' in metric:
-                                        metrics["gpu_utilization"] = {
-                                            "value": value / 100.0,  # Convert to percentage
-                                            "unit": "%",
-                                            "data_type": "FLOAT",
-                                            "category": "GPU"
-                                        }
-                                    elif 'vddgfx' in metric:
-                                        metrics["gpu_voltage"] = {
-                                            "value": value / 1000.0,  # Convert to volts
-                                            "unit": "V",
-                                            "data_type": "FLOAT",
-                                            "category": "GPU"
-                                        }
-                                    elif 'power' in metric:
-                                        metrics["gpu_power"] = {
-                                            "value": value / 1000000.0,  # Convert to watts
-                                            "unit": "W",
-                                            "data_type": "FLOAT",
-                                            "category": "GPU"
-                                        }
+                
+                # For DEBUG: log available temperature sensors
+                if logger.isEnabledFor(logging.DEBUG):
+                    logger.debug(f"Temperature sensors detected: {list(temps.keys() if temps else [])}")
+                
+                if not temps:
+                    # If psutil doesn't detect sensors but we know they exist (coretemp on HP Z240)
+                    # Try reading directly from the sysfs filesystem on Linux
+                    if platform.system() == 'Linux':
+                        try:
+                            # Check for coretemp specifically (detected on HP Z240)
+                            coretemp_path = "/sys/devices/platform/coretemp.0/hwmon"
+                            if os.path.exists(coretemp_path):
+                                # Find the hwmon directory
+                                hwmon_dirs = [os.path.join(coretemp_path, d) for d in os.listdir(coretemp_path) 
+                                             if d.startswith("hwmon")]
+                                
+                                if hwmon_dirs:
+                                    hwmon_dir = hwmon_dirs[0]
+                                    # Look for temp input files
+                                    for file in os.listdir(hwmon_dir):
+                                        if file.startswith("temp") and file.endswith("_input"):
+                                            # Get the temperature value
+                                            with open(os.path.join(hwmon_dir, file), 'r') as f:
+                                                temp_value = float(f.read().strip()) / 1000.0  # Convert from millidegrees
+                                            
+                                            # Try to get a label if available
+                                            label = None
+                                            label_file = file.replace("_input", "_label")
+                                            if os.path.exists(os.path.join(hwmon_dir, label_file)):
+                                                with open(os.path.join(hwmon_dir, label_file), 'r') as f:
+                                                    label = f.read().strip()
+                                            
+                                            # Add the temperature reading
+                                            sensor_id = file.split("_")[0]  # e.g., "temp1"
+                                            metrics[f"temp_coretemp_{sensor_id}"] = {
+                                                "value": temp_value,
+                                                "unit": "°C",
+                                                "data_type": "FLOAT",
+                                                "category": "TEMPERATURE",
+                                                "label": label or f"CPU {sensor_id}"
+                                            }
+                                            logger.info(f"Found temperature: {label or f'CPU {sensor_id}'} = {temp_value}°C")
+                        except Exception as e:
+                            logger.debug(f"Failed to read coretemp sensors directly: {e}")
+                else:
+                    for chip, sensors in temps.items():
+                        for i, sensor in enumerate(sensors):
+                            metrics[f"temp_{chip}_{i}"] = {
+                                "value": sensor.current,
+                                "unit": "°C",
+                                "data_type": "FLOAT",
+                                "category": "TEMPERATURE",
+                                "label": sensor.label if hasattr(sensor, 'label') and sensor.label else f"{chip}_{i}"
+                            }
             except Exception as e:
-                logger.error(f"Error collecting GPU metrics: {e}")
+                logger.debug(f"Error reading temperature sensors: {e}")
                 
         return metrics
     except Exception as e:
@@ -739,7 +732,7 @@ if __name__ == "__main__":
     # Fill in your actual server address here
     WEBSOCKET_URL = "ws://ghoest:8000/ws/system/metrics/"
     
-    # Ensure we have the os module imported for GPU metrics
+    # Ensure we have the os module imported for temperature metrics
     import os
     
     # Print system summary at startup
