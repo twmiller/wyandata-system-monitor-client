@@ -1,0 +1,13 @@
+[Unit]
+Description=WyanData System Monitoring Client
+After=network.target
+
+[Service]
+Type=simple
+ExecStart=%h/Developer/wyandata-system-monitor-client/venv/bin/python %h/Developer/wyandata-system-monitor-client/system_monitor.py
+WorkingDirectory=%h/Developer/wyandata-system-monitor-client
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=default.target

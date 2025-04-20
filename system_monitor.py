@@ -1,4 +1,4 @@
-sudo apt-get install lm-sensors ipmitool# system_monitor_client.py
+# system_monitor_client.py
 
 import asyncio
 import websockets
