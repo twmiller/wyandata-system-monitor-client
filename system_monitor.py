@@ -506,50 +506,158 @@ async def collect_metrics():
             try:
                 temps = psutil.sensors_temperatures()
                 
-                # For DEBUG: log available temperature sensors
-                if logger.isEnabledFor(logging.DEBUG):
-                    logger.debug(f"Temperature sensors detected: {list(temps.keys() if temps else [])}")
+                # Print more detailed debug info about available sensors
+                logger.info(f"Temperature sensors detected: {list(temps.keys() if temps else [])}")
                 
                 if not temps:
+                    logger.info("No temperature sensors detected through psutil, trying alternative methods")
                     # If psutil doesn't detect sensors but we know they exist (coretemp on HP Z240)
                     # Try reading directly from the sysfs filesystem on Linux
                     if platform.system() == 'Linux':
+                        # First check if this is an HP Z240 or similar workstation
+                        is_hp_workstation = False
                         try:
-                            # Check for coretemp specifically (detected on HP Z240)
-                            coretemp_path = "/sys/devices/platform/coretemp.0/hwmon"
-                            if os.path.exists(coretemp_path):
-                                # Find the hwmon directory
-                                hwmon_dirs = [os.path.join(coretemp_path, d) for d in os.listdir(coretemp_path) 
-                                             if d.startswith("hwmon")]
-                                
-                                if hwmon_dirs:
-                                    hwmon_dir = hwmon_dirs[0]
-                                    # Look for temp input files
-                                    for file in os.listdir(hwmon_dir):
-                                        if file.startswith("temp") and file.endswith("_input"):
-                                            # Get the temperature value
-                                            with open(os.path.join(hwmon_dir, file), 'r') as f:
-                                                temp_value = float(f.read().strip()) / 1000.0  # Convert from millidegrees
-                                            
-                                            # Try to get a label if available
-                                            label = None
-                                            label_file = file.replace("_input", "_label")
-                                            if os.path.exists(os.path.join(hwmon_dir, label_file)):
-                                                with open(os.path.join(hwmon_dir, label_file), 'r') as f:
-                                                    label = f.read().strip()
-                                            
-                                            # Add the temperature reading
-                                            sensor_id = file.split("_")[0]  # e.g., "temp1"
-                                            metrics[f"temp_coretemp_{sensor_id}"] = {
-                                                "value": temp_value,
-                                                "unit": "°C",
-                                                "data_type": "FLOAT",
-                                                "category": "TEMPERATURE",
-                                                "label": label or f"CPU {sensor_id}"
-                                            }
-                                            logger.info(f"Found temperature: {label or f'CPU {sensor_id}'} = {temp_value}°C")
+                            with open('/sys/class/dmi/id/product_name', 'r') as f:
+                                product_name = f.read().strip()
+                                logger.info(f"System product name: {product_name}")
+                                if 'HP' in product_name and ('Z240' in product_name or 'Z4' in product_name or 'Z' in product_name):
+                                    is_hp_workstation = True
+                                    logger.info("HP workstation detected, using specialized temperature detection")
                         except Exception as e:
-                            logger.debug(f"Failed to read coretemp sensors directly: {e}")
+                            logger.debug(f"Could not read product name: {e}")
+
+                        # Try multiple paths for coretemp
+                        coretemp_paths = [
+                            "/sys/devices/platform/coretemp.0/hwmon",
+                            "/sys/class/hwmon",
+                            "/sys/devices/platform/coretemp.0",
+                            "/sys/devices/virtual/thermal/thermal_zone*"
+                        ]
+                        
+                        found_temps = False
+                        # For HP workstations, try even harder to find temperature sensors
+                        if is_hp_workstation:
+                            try:
+                                # Try to ensure the coretemp module is loaded
+                                logger.info("Checking if coretemp module is loaded")
+                                lsmod_output = subprocess.check_output(['lsmod'], universal_newlines=True)
+                                if 'coretemp' not in lsmod_output:
+                                    logger.info("coretemp module not detected, may need to be loaded with: sudo modprobe coretemp")
+                                    # We won't try to load it automatically as that would require sudo
+                                else:
+                                    logger.info("coretemp module is loaded")
+                                    
+                                # Direct check of all hwmon devices
+                                for i in range(10):  # Check several potential hwmon devices
+                                    hwmon_path = f"/sys/class/hwmon/hwmon{i}"
+                                    if os.path.exists(hwmon_path):
+                                        logger.info(f"Checking hwmon device: {hwmon_path}")
+                                        # Check if this is a temperature sensor
+                                        name_path = os.path.join(hwmon_path, "name")
+                                        if os.path.exists(name_path):
+                                            with open(name_path, 'r') as f:
+                                                sensor_name = f.read().strip()
+                                                logger.info(f"Found sensor: {sensor_name} at {hwmon_path}")
+                                                
+                                                # If this is a CPU temperature sensor
+                                                if sensor_name in ["coretemp", "k10temp", "cpu_thermal"]:
+                                                    # Look for temp*_input files
+                                                    for file in os.listdir(hwmon_path):
+                                                        if file.startswith("temp") and file.endswith("_input"):
+                                                            temp_path = os.path.join(hwmon_path, file)
+                                                            with open(temp_path, 'r') as tf:
+                                                                temp_value = float(tf.read().strip()) / 1000.0
+                                                                
+                                                            # Try to get a label if available
+                                                            label = None
+                                                            label_file = file.replace("_input", "_label")
+                                                            label_path = os.path.join(hwmon_path, label_file)
+                                                            if os.path.exists(label_path):
+                                                                with open(label_path, 'r') as lf:
+                                                                    label = lf.read().strip()
+                                                                    
+                                                            sensor_id = file.split("_")[0]  # e.g., "temp1"
+                                                            metrics[f"temp_{sensor_name}_{sensor_id}"] = {
+                                                                "value": temp_value,
+                                                                "unit": "°C",
+                                                                "data_type": "FLOAT",
+                                                                "category": "TEMPERATURE",
+                                                                "label": label or f"{sensor_name} {sensor_id}"
+                                                            }
+                                                            logger.info(f"Added temperature: {label or f'{sensor_name} {sensor_id}'} = {temp_value}°C")
+                                                            found_temps = True
+                            except Exception as e:
+                                logger.error(f"Error in HP workstation specific temperature detection: {e}")
+
+                        # Try the original coretemp paths if still needed
+                        if not found_temps:
+                            for base_path in coretemp_paths:
+                                try:
+                                    # Handle wildcard paths
+                                    if '*' in base_path:
+                                        import glob
+                                        matching_paths = glob.glob(base_path)
+                                        logger.info(f"Found {len(matching_paths)} matching paths for {base_path}")
+                                        for path in matching_paths:
+                                            logger.info(f"Checking path: {path}")
+                                            if os.path.exists(path):
+                                                # Get temperature directly
+                                                if os.path.isfile(os.path.join(path, 'temp')):
+                                                    with open(os.path.join(path, 'temp'), 'r') as f:
+                                                        temp_value = float(f.read().strip()) / 1000.0
+                                                        metrics[f"temp_thermal_{os.path.basename(path)}"] = {
+                                                            "value": temp_value,
+                                                            "unit": "°C",
+                                                            "data_type": "FLOAT",
+                                                            "category": "TEMPERATURE",
+                                                            "label": f"Thermal {os.path.basename(path)}"
+                                                        }
+                                                        logger.info(f"Found temperature: Thermal {os.path.basename(path)} = {temp_value}°C")
+                                                        found_temps = True
+                                    elif os.path.exists(base_path):
+                                        logger.info(f"Checking base path: {base_path}")
+                                        # If it's a directory, look for hwmon subdirs
+                                        if os.path.isdir(base_path):
+                                            if base_path.endswith('hwmon'):
+                                                # Direct hwmon directory
+                                                hwmon_dirs = [base_path]
+                                            else:
+                                                # Need to find hwmon subdirectories
+                                                hwmon_dirs = [os.path.join(base_path, d) for d in os.listdir(base_path) 
+                                                            if d.startswith("hwmon") and os.path.isdir(os.path.join(base_path, d))]
+                                            
+                                            logger.info(f"Found hwmon directories: {hwmon_dirs}")
+                                            
+                                            if hwmon_dirs:
+                                                for hwmon_dir in hwmon_dirs:
+                                                    # Look for temp input files
+                                                    for file in os.listdir(hwmon_dir):
+                                                        if file.startswith("temp") and file.endswith("_input"):
+                                                            with open(os.path.join(hwmon_dir, file), 'r') as f:
+                                                                temp_value = float(f.read().strip()) / 1000.0
+                                                            
+                                                            # Try to get a label if available
+                                                            label = None
+                                                            label_file = file.replace("_input", "_label")
+                                                            if os.path.exists(os.path.join(hwmon_dir, label_file)):
+                                                                with open(os.path.join(hwmon_dir, label_file), 'r') as f:
+                                                                    label = f.read().strip()
+                                                            
+                                                            sensor_id = file.split("_")[0]
+                                                            metrics[f"temp_coretemp_{sensor_id}"] = {
+                                                                "value": temp_value,
+                                                                "unit": "°C",
+                                                                "data_type": "FLOAT",
+                                                                "category": "TEMPERATURE",
+                                                                "label": label or f"CPU {sensor_id}"
+                                                            }
+                                                            logger.info(f"Found temperature: {label or f'CPU {sensor_id}'} = {temp_value}°C")
+                                                            found_temps = True
+                                except Exception as e:
+                                    logger.info(f"Failed to read from path {base_path}: {e}")
+                            
+                        if not found_temps:
+                            logger.warning("Could not find temperature sensors through any method")
                 else:
                     for chip, sensors in temps.items():
                         for i, sensor in enumerate(sensors):
@@ -560,8 +668,9 @@ async def collect_metrics():
                                 "category": "TEMPERATURE",
                                 "label": sensor.label if hasattr(sensor, 'label') and sensor.label else f"{chip}_{i}"
                             }
+                            logger.info(f"Added temperature sensor via psutil: {chip}_{i} = {sensor.current}°C ({sensor.label if hasattr(sensor, 'label') and sensor.label else 'unlabeled'})")
             except Exception as e:
-                logger.debug(f"Error reading temperature sensors: {e}")
+                logger.error(f"Error reading temperature sensors: {e}")
                 
         return metrics
     except Exception as e:
@@ -734,6 +843,10 @@ if __name__ == "__main__":
     
     # Ensure we have the os module imported for temperature metrics
     import os
+    import glob
+    
+    # Enable debug logging temporarily to help troubleshoot temperature sensors
+    logger.setLevel(logging.INFO)
     
     # Print system summary at startup
     asyncio.run(print_system_summary())
