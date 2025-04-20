@@ -15,20 +15,62 @@ def print_section(title):
     print(f" {title}")
     print("=" * 50)
 
-def check_coretemp_module():
-    print_section("Checking coretemp module")
+def check_kernel_modules():
+    print_section("Checking temperature-related kernel modules")
     try:
         lsmod_output = subprocess.check_output(['lsmod'], universal_newlines=True)
-        if 'coretemp' in lsmod_output:
-            print("✅ coretemp module is loaded")
-        else:
-            print("❌ coretemp module is NOT loaded")
-            print("\nTry loading it with:")
-            print("  sudo modprobe coretemp")
-            print("\nTo load it automatically at boot:")
-            print("  echo \"coretemp\" | sudo tee -a /etc/modules")
+        modules_to_check = ['coretemp', 'k10temp', 'intel_powerclamp', 'thermal', 'acpi_thermal_rel']
+        
+        found_modules = []
+        for module in modules_to_check:
+            if module in lsmod_output:
+                found_modules.append(module)
+                print(f"✅ {module} module is loaded")
+            else:
+                print(f"❌ {module} module is NOT loaded")
+        
+        if not found_modules:
+            print("\nNo temperature-related modules found. Try loading appropriate modules:")
+            print("  For Intel CPUs:")
+            print("    sudo modprobe intel_powerclamp")
+            print("  For AMD CPUs:")
+            print("    sudo modprobe k10temp")
+            print("\nTo check available modules:")
+            print("  find /lib/modules/$(uname -r) -name '*temp*.ko*'")
     except Exception as e:
-        print(f"Error checking coretemp module: {e}")
+        print(f"Error checking kernel modules: {e}")
+
+def list_available_modules():
+    print_section("Available temperature modules")
+    try:
+        kernel_version = subprocess.check_output(['uname', '-r'], universal_newlines=True).strip()
+        module_paths = subprocess.check_output(
+            ['find', f'/lib/modules/{kernel_version}', '-name', '*temp*.ko*'], 
+            stderr=subprocess.STDOUT,
+            universal_newlines=True
+        ).strip().split('\n')
+        
+        if module_paths and module_paths[0]:
+            print(f"Found {len(module_paths)} temperature-related modules:")
+            for path in module_paths:
+                print(f"  → {path}")
+        else:
+            print("No temperature modules found in kernel modules directory")
+        
+        # Also check thermal modules
+        thermal_paths = subprocess.check_output(
+            ['find', f'/lib/modules/{kernel_version}', '-name', '*thermal*.ko*'], 
+            stderr=subprocess.STDOUT,
+            universal_newlines=True
+        ).strip().split('\n')
+        
+        if thermal_paths and thermal_paths[0]:
+            print(f"\nFound {len(thermal_paths)} thermal-related modules:")
+            for path in thermal_paths:
+                print(f"  → {path}")
+            
+    except Exception as e:
+        print(f"Error listing available modules: {e}")
 
 def scan_hwmon_devices():
     print_section("Scanning hwmon devices")
@@ -108,12 +150,49 @@ def check_thermal_zones():
             temp_path = os.path.join(zone_path, "temp")
             if os.path.exists(temp_path):
                 with open(temp_path, 'r') as f:
-                    temp_value = float(f.read().strip()) / 1000.0
-                print(f"  Temperature: {temp_value}°C")
+                    try:
+                        temp_value = float(f.read().strip()) / 1000.0
+                        print(f"  Temperature: {temp_value}°C")
+                    except ValueError:
+                        print(f"  Error reading temperature: invalid value")
             else:
                 print("  ❌ No temperature reading available")
     except Exception as e:
         print(f"Error checking thermal zones: {e}")
+
+def check_acpi_thermal():
+    print_section("Checking ACPI thermal information")
+    
+    try:
+        if os.path.exists("/proc/acpi/thermal_zone"):
+            thermal_zones = os.listdir("/proc/acpi/thermal_zone")
+            print(f"Found {len(thermal_zones)} ACPI thermal zones")
+            
+            for zone in thermal_zones:
+                print(f"\nZone: {zone}")
+                
+                # Check temperature
+                temp_path = f"/proc/acpi/thermal_zone/{zone}/temperature"
+                if os.path.exists(temp_path):
+                    with open(temp_path, 'r') as f:
+                        print(f"  Temperature: {f.read().strip()}")
+                else:
+                    print("  No temperature data available")
+        else:
+            print("ACPI thermal zone information not available")
+
+        # Check for ACPI data in sysfs
+        print("\nChecking ACPI in sysfs:")
+        for path in glob.glob("/sys/class/thermal/thermal_zone*/device/acpi*"):
+            print(f"Found: {path}")
+            try:
+                with open(path, 'r') as f:
+                    print(f"  Value: {f.read().strip()}")
+            except:
+                print("  Cannot read file")
+                
+    except Exception as e:
+        print(f"Error checking ACPI thermal: {e}")
 
 def check_lm_sensors():
     print_section("Checking lm-sensors output")
@@ -131,8 +210,12 @@ def check_lm_sensors():
             
         # Run sensors command
         print("Output of 'sensors' command:")
-        sensors_output = subprocess.check_output(['sensors'], universal_newlines=True)
-        print(sensors_output)
+        try:
+            sensors_output = subprocess.check_output(['sensors'], universal_newlines=True)
+            print(sensors_output)
+        except subprocess.CalledProcessError as e:
+            print(f"Error running sensors command: {e}")
+            print("Try running 'sudo sensors-detect --auto' to configure sensors")
     except Exception as e:
         print(f"Error running lm-sensors: {e}")
 
@@ -143,6 +226,7 @@ def check_system_info():
         print(f"Platform: {platform.platform()}")
         print(f"Machine: {platform.machine()}")
         print(f"Processor: {platform.processor()}")
+        print(f"Kernel: {os.uname().release}")
         
         # Get CPU model from /proc/cpuinfo
         try:
@@ -170,6 +254,59 @@ def check_system_info():
     except Exception as e:
         print(f"Error getting system info: {e}")
 
+def check_proc_temperatures():
+    print_section("Checking /proc for temperature data")
+    
+    try:
+        # Some systems have CPU temperature here
+        if os.path.exists("/proc/acpi/ibm/thermal"):
+            print("ThinkPad-specific thermal data:")
+            with open("/proc/acpi/ibm/thermal", 'r') as f:
+                print(f.read())
+        else:
+            print("No ThinkPad-specific thermal data available")
+            
+        # Check for other temperature sources in /proc
+        temp_files = []
+        for root, dirs, files in os.walk("/proc"):
+            for file in files:
+                if "temp" in file.lower():
+                    temp_files.append(os.path.join(root, file))
+        
+        if temp_files:
+            print(f"\nFound {len(temp_files)} temperature-related files in /proc:")
+            for file in temp_files[:10]:  # Limit to first 10 to avoid excessive output
+                print(f"  {file}")
+        else:
+            print("No temperature-related files found in /proc")
+    except Exception as e:
+        print(f"Error checking /proc temperatures: {e}")
+
+def suggest_next_steps():
+    print_section("Recommended Next Steps")
+    
+    print("Based on your Ubuntu 24.04 system and HP Z240 workstation:")
+    print("")
+    print("1. Install and configure lm-sensors:")
+    print("   sudo apt-get update")
+    print("   sudo apt-get install lm-sensors")
+    print("   sudo sensors-detect --auto")
+    print("")
+    print("2. Load appropriate kernel modules for Intel CPU:")
+    print("   sudo modprobe intel_powerclamp  # For newer kernels")
+    print("   echo 'intel_powerclamp' | sudo tee -a /etc/modules")
+    print("")
+    print("3. Configure system to use ACPI thermal sensors:")
+    print("   sudo apt-get install acpi")
+    print("   sudo systemctl restart acpid")
+    print("")
+    print("4. Update the system monitor client to use thermal_zone entries if available.")
+    print("")
+    print("5. Check if the temp sensor is exposed through MSR (Model-Specific Registers):")
+    print("   sudo apt-get install msr-tools")
+    print("   sudo modprobe msr")
+    print("   sudo rdmsr --all")
+
 if __name__ == "__main__":
     print("Temperature Sensor Diagnostic Tool")
     print("=================================")
@@ -179,10 +316,13 @@ if __name__ == "__main__":
         sys.exit(1)
     
     check_system_info()
-    check_coretemp_module()
+    check_kernel_modules()
+    list_available_modules()
     scan_hwmon_devices()
     check_thermal_zones()
+    check_acpi_thermal()
     check_lm_sensors()
+    check_proc_temperatures()
+    suggest_next_steps()
     
-    print("\nDiagnostic completed. If you see temperature readings above but they're")
-    print("not showing in the monitoring client, please share this output with the developer.")
+    print("\nDiagnostic completed. Please share this output with the developer.")
