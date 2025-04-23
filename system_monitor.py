@@ -607,16 +607,9 @@ async def send_metrics(websocket):
         start_time = time.time()
         logger.debug(f"Collecting metrics for {HOSTNAME}...")
         
-        # Check if websocket is still open using a safer method
-        try:
-            # Just use a simple check instead of accessing internal attributes
-            if websocket.closed:
-                logger.error("WebSocket connection is closed, cannot send metrics")
-                return False
-        except Exception as e:
-            logger.error(f"Error checking websocket status: {e}")
-            return False
-            
+        # Check if websocket is still open using a safer method that doesn't rely on internal attributes
+        # We'll just proceed and let the send operation handle any connection issues
+        
         # Collect metrics
         metrics = await collect_metrics()
         
@@ -639,7 +632,7 @@ async def send_metrics(websocket):
             "timestamp": datetime.now().isoformat()
         }
         
-        # Send metrics message
+        # Send metrics message - this will fail if the connection is closed
         await websocket.send(json.dumps(metrics_message))
         
         # Calculate elapsed time
@@ -688,7 +681,7 @@ async def monitor_system():
             logger.info(f"Connecting to {WEBSOCKET_URL} (attempt {connection_attempts})...")
             
             try:
-                # Wrap the whole connection handling in a more robust error handler
+                # Using context manager for websocket connection (automatically closes when exiting the context)
                 async with websockets.connect(WEBSOCKET_URL) as websocket:
                     logger.info("✅ WebSocket connection established")
                     connection_attempts = 0  # Reset counter on successful connection
@@ -712,6 +705,16 @@ async def monitor_system():
                     failure_count = 0
                     while True:
                         try:
+                            # Ping the server to verify connection is still alive
+                            try:
+                                # Send a small ping (some servers might not support actual websocket pings)
+                                ping_message = {"type": "ping", "timestamp": datetime.now().isoformat()}
+                                await websocket.send(json.dumps(ping_message))
+                                logger.debug("Connection ping sent")
+                            except Exception as e:
+                                logger.error(f"Connection ping failed: {e}")
+                                break
+                                
                             # Send metrics
                             send_count += 1
                             logger.debug(f"Sending metrics batch #{send_count}")
@@ -732,13 +735,17 @@ async def monitor_system():
                             
                             # Wait before sending next update
                             await asyncio.sleep(metrics_interval)
+                        except websockets.exceptions.ConnectionClosed as e:
+                            logger.error(f"Connection closed during metrics loop: {e}")
+                            break
                         except Exception as e:
                             logger.error(f"Error in metrics sending loop: {e}")
                             break
+                            
             except websockets.exceptions.InvalidStatusCode as e:
-                logger.error(f"Invalid status code: {e.status_code}")
+                logger.error(f"Invalid status code: {e}")
                 # If we get 404, the endpoint might be wrong - wait longer
-                if e.status_code == 404:
+                if hasattr(e, 'status_code') and e.status_code == 404:
                     await asyncio.sleep(30)
             except Exception as e:
                 logger.error(f"Error in connection handling: {e}")
