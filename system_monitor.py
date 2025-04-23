@@ -11,20 +11,57 @@ import time
 import logging
 import re
 import sys
+import os
 import subprocess
 from datetime import datetime
+from pathlib import Path
 
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler(os.path.join(os.path.dirname(os.path.abspath(__file__)), "monitor.log")),
+        logging.StreamHandler()
+    ]
 )
 logger = logging.getLogger('system_monitor_client')
 
 # Configuration
 WEBSOCKET_URL = "ws://ghoest:8000/ws/system/metrics/"
-CLIENT_ID = str(uuid.uuid4())
+CLIENT_ID_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "client_id.txt")
 HOSTNAME = socket.gethostname()
+
+# Get or generate a persistent client ID
+def get_client_id():
+    try:
+        # First try to load existing client ID
+        if os.path.exists(CLIENT_ID_FILE):
+            with open(CLIENT_ID_FILE, 'r') as f:
+                client_id = f.read().strip()
+                if client_id:
+                    logger.info(f"Using existing client ID: {client_id}")
+                    return client_id
+        
+        # Generate new client ID if none exists
+        client_id = str(uuid.uuid4())
+        
+        # Try to save it
+        try:
+            with open(CLIENT_ID_FILE, 'w') as f:
+                f.write(client_id)
+            logger.info(f"Generated and saved new client ID: {client_id}")
+        except Exception as e:
+            logger.warning(f"Could not save client ID to file: {e}")
+            logger.info(f"Using temporary client ID: {client_id}")
+            
+        return client_id
+    except Exception as e:
+        logger.error(f"Error managing client ID: {e}")
+        return str(uuid.uuid4())  # Fallback to a temporary ID
+
+# Initialize client ID
+CLIENT_ID = get_client_id()
 
 async def collect_system_info():
     """Collect basic system information"""
@@ -502,173 +539,6 @@ async def collect_metrics():
                 "network_interface": interface
             }
         
-        # Add temperature sensors if available
-        if hasattr(psutil, "sensors_temperatures"):
-            try:
-                temps = psutil.sensors_temperatures()
-                
-                # Print information about available sensors
-                logger.info(f"Temperature sensors detected via psutil: {list(temps.keys() if temps else [])}")
-                
-                if temps:
-                    # Standard psutil approach - use it if available
-                    for chip, sensors in temps.items():
-                        for i, sensor in enumerate(sensors):
-                            metrics[f"temp_{chip}_{i}"] = {
-                                "value": sensor.current,
-                                "unit": "°C",
-                                "data_type": "FLOAT",
-                                "category": "TEMPERATURE",
-                                "label": sensor.label if hasattr(sensor, 'label') and sensor.label else f"{chip}_{i}"
-                            }
-                            logger.info(f"Added temperature sensor via psutil: {chip}_{i} = {sensor.current}°C ({sensor.label if hasattr(sensor, 'label') and sensor.label else 'unlabeled'})")
-                else:
-                    logger.info("No temperature sensors found via psutil, trying alternative methods")
-            except Exception as e:
-                logger.error(f"Error reading temperature sensors via psutil: {e}")
-
-        # Try alternative temperature detection methods for systems 
-        # where psutil fails to detect sensors
-        try:
-            # First check thermal_zone entries (most universally available)
-            thermal_base = "/sys/class/thermal"
-            thermal_found = False
-            
-            if os.path.exists(thermal_base):
-                thermal_zones = [d for d in os.listdir(thermal_base) if d.startswith("thermal_zone")]
-                logger.info(f"Found {len(thermal_zones)} thermal zones")
-                
-                for zone in thermal_zones:
-                    try:
-                        zone_path = os.path.join(thermal_base, zone)
-                        
-                        # Get zone type
-                        type_path = os.path.join(zone_path, "type")
-                        zone_type = "unknown"
-                        if os.path.exists(type_path):
-                            with open(type_path, 'r') as f:
-                                zone_type = f.read().strip()
-                        
-                        # Get temperature
-                        temp_path = os.path.join(zone_path, "temp")
-                        if os.path.exists(temp_path):
-                            with open(temp_path, 'r') as f:
-                                temp_value = float(f.read().strip()) / 1000.0  # Convert from millidegrees
-                                metrics[f"temp_zone_{zone}"] = {
-                                    "value": temp_value,
-                                    "unit": "°C",
-                                    "data_type": "FLOAT",
-                                    "category": "TEMPERATURE",
-                                    "label": f"Thermal Zone {zone_type}"
-                                }
-                                logger.info(f"Added thermal zone temperature: {zone} ({zone_type}) = {temp_value}°C")
-                                thermal_found = True
-                    except Exception as e:
-                        logger.debug(f"Error reading thermal zone {zone}: {e}")
-            
-            # Next, try with hwmon devices if thermal zones didn't work
-            if not thermal_found:
-                hwmon_base = "/sys/class/hwmon"
-                if os.path.exists(hwmon_base):
-                    hwmon_devices = os.listdir(hwmon_base)
-                    logger.info(f"Found {len(hwmon_devices)} hwmon devices")
-                    
-                    for device in hwmon_devices:
-                        try:
-                            device_path = os.path.join(hwmon_base, device)
-                            
-                            # Try to get device name
-                            name_path = os.path.join(device_path, "name")
-                            device_name = "unknown"
-                            if os.path.exists(name_path):
-                                with open(name_path, 'r') as f:
-                                    device_name = f.read().strip()
-                            
-                            # Look for temperature inputs
-                            for file in os.listdir(device_path):
-                                if file.startswith("temp") and file.endswith("_input"):
-                                    with open(os.path.join(device_path, file), 'r') as f:
-                                        temp_value = float(f.read().strip()) / 1000.0
-                                    
-                                    # Try to get a label if available
-                                    label = None
-                                    label_file = file.replace("_input", "_label")
-                                    if os.path.exists(os.path.join(device_path, label_file)):
-                                        with open(os.path.join(device_path, label_file), 'r') as f:
-                                            label = f.read().strip()
-                                    
-                                    metrics[f"temp_{device_name}_{file.split('_')[0]}"] = {
-                                        "value": temp_value,
-                                        "unit": "°C",
-                                        "data_type": "FLOAT",
-                                        "category": "TEMPERATURE",
-                                        "label": label or f"{device_name} {file}"
-                                    }
-                                    logger.info(f"Added hwmon temperature: {device_name} {file} = {temp_value}°C")
-                                    thermal_found = True
-                        except Exception as e:
-                            logger.debug(f"Error reading hwmon device {device}: {e}")
-            
-            # If we still don't have temps, try to read CPU package temp using ACPI
-            if not thermal_found and platform.system() == 'Linux':
-                try:
-                    # Try reading from proc/acpi for CPU temp
-                    acpi_paths = [
-                        "/proc/acpi/thermal_zone",
-                        "/proc/acpi/ibm/thermal"
-                    ]
-                    
-                    for path in acpi_paths:
-                        if os.path.exists(path):
-                            logger.info(f"Found ACPI temperature path: {path}")
-                            
-                            if os.path.isdir(path):
-                                # Directory structure
-                                zones = os.listdir(path)
-                                for zone in zones:
-                                    zone_path = os.path.join(path, zone)
-                                    temp_path = os.path.join(zone_path, "temperature")
-                                    
-                                    if os.path.exists(temp_path):
-                                        with open(temp_path, 'r') as f:
-                                            temp_line = f.read().strip()
-                                            # Format varies, try to extract the number
-                                            temp_value = float(re.search(r'\d+', temp_line).group())
-                                            metrics[f"temp_acpi_{zone}"] = {
-                                                "value": temp_value,
-                                                "unit": "°C",
-                                                "data_type": "FLOAT",
-                                                "category": "TEMPERATURE",
-                                                "label": f"ACPI {zone}"
-                                            }
-                                            logger.info(f"Added ACPI temperature: {zone} = {temp_value}°C")
-                                            thermal_found = True
-                            else:
-                                # Direct file (like ThinkPad's thermal file)
-                                with open(path, 'r') as f:
-                                    content = f.read().strip()
-                                    # Extract the first temperature value
-                                    match = re.search(r'(\d+)', content)
-                                    if match:
-                                        temp_value = float(match.group(1))
-                                        metrics["temp_acpi"] = {
-                                            "value": temp_value,
-                                            "unit": "°C",
-                                            "data_type": "FLOAT",
-                                            "category": "TEMPERATURE",
-                                            "label": "ACPI CPU Temperature"
-                                        }
-                                        logger.info(f"Added ACPI temperature: CPU = {temp_value}°C")
-                                        thermal_found = True
-                except Exception as e:
-                    logger.debug(f"Failed to read from ACPI temperature sources: {e}")
-                    
-            if not thermal_found:
-                logger.warning("Could not find temperature sensors through any method")
-            
-        except Exception as e:
-            logger.error(f"Error in alternative temperature detection: {e}")
-                
         return metrics
     except Exception as e:
         logger.error(f"Error collecting metrics: {e}")
@@ -700,7 +570,7 @@ async def register_host(websocket):
         }
         
         # Send registration message
-        logger.info(f"Sending registration data to server ({len(json.dumps(registration_message))} bytes)...")
+        logger.info(f"Sending registration data to server")
         await websocket.send(json.dumps(registration_message))
         logger.info(f"Registration data sent successfully")
         
@@ -708,70 +578,31 @@ async def register_host(websocket):
         logger.info("Waiting for server confirmation...")
         
         # Set a reasonable timeout
-        max_wait_time = 5  # seconds
+        max_wait_time = 10  # seconds
         start_time = time.time()
         
         while time.time() - start_time < max_wait_time:
-            response = await websocket.recv()
-            response_data = json.loads(response)
-            
-            logger.info(f"Received response: {response_data.get('type')}")
-            
-            if response_data.get('type') == 'registration_confirmed':
-                logger.info(f"✅ Host registration confirmed with ID: {response_data.get('host_id')}")
-                return True
+            try:
+                response = await asyncio.wait_for(websocket.recv(), timeout=2.0)
+                response_data = json.loads(response)
+                
+                logger.info(f"Received response: {response_data.get('type')}")
+                
+                if response_data.get('type') == 'registration_confirmed':
+                    logger.info(f"✅ Host registration confirmed with ID: {response_data.get('host_id')}")
+                    return True
+            except asyncio.TimeoutError:
+                logger.warning("Timed out waiting for registration response, continuing to wait...")
         
-        logger.error(f"❌ Host registration timed out")
+        logger.error("❌ Host registration timed out")
         return False
-            
-    except Exception as e:
-        logger.error(f"❌ Error during host registration: {e}")
-        return False    
-    """Register the host with the monitoring server"""
-    try:
-        logger.info(f"Beginning host registration process for {HOSTNAME}...")
-        
-        # Collect system information
-        logger.info("Collecting system information...")
-        system_info = await collect_system_info()
-        
-        logger.info("Collecting storage device information...")
-        storage_devices = await collect_storage_devices()
-        
-        logger.info("Collecting network interface information...")
-        network_interfaces = await collect_network_interfaces()
-        
-        # Create registration message
-        registration_message = {
-            "type": "register_host",
-            "hostname": HOSTNAME,
-            "system_info": system_info,
-            "storage_devices": storage_devices,
-            "network_interfaces": network_interfaces,
-            "timestamp": datetime.now().isoformat()
-        }
-        
-        # Send registration message
-        logger.info(f"Sending registration data to server ({len(json.dumps(registration_message))} bytes)...")
-        await websocket.send(json.dumps(registration_message))
-        logger.info(f"Registration data sent successfully")
-        
-        # Wait for confirmation
-        logger.info("Waiting for server confirmation...")
-        response = await websocket.recv()
-        response_data = json.loads(response)
-        
-        if response_data.get('type') == 'registration_confirmed':
-            logger.info(f"✅ Host registration confirmed with ID: {response_data.get('host_id')}")
-            return True
-        else:
-            logger.error(f"❌ Host registration failed: {response_data}")
-            return False
             
     except Exception as e:
         logger.error(f"❌ Error during host registration: {e}")
         return False
 
+async def send_metrics(websocket):
+    """Send metrics to the monitoring server"""
     try:
         start_time = time.time()
         logger.debug(f"Collecting metrics for {HOSTNAME}...")
@@ -812,7 +643,7 @@ async def register_host(websocket):
         
         return True
     except websockets.exceptions.ConnectionClosed as e:
-        logger.error(f"WebSocket connection closed while sending metrics: {e.code}, {e.reason}")
+        logger.error(f"WebSocket connection closed while sending metrics: {e}")
         return False
     except Exception as e:
         logger.error(f"Error sending metrics: {e}")
@@ -820,86 +651,59 @@ async def register_host(websocket):
         if isinstance(e, (websockets.exceptions.WebSocketException, ConnectionError)):
             return False
         return True
-    
-async def send_metrics(websocket):
-    """Send metrics to the monitoring server"""
-    try:
-        start_time = time.time()
-        logger.debug(f"Collecting metrics for {HOSTNAME}...")
-        
-        # Collect metrics
-        metrics = await collect_metrics()
-        
-        # Count metrics by category
-        categories = {}
-        for key, metric in metrics.items():
-            category = metric.get("category", "OTHER")
-            if category not in categories:
-                categories[category] = 0
-            categories[category] += 1
-        
-        categories_str = ", ".join([f"{cat}: {count}" for cat, count in categories.items()])
-        logger.info(f"Sending {len(metrics)} metrics ({categories_str})")
-        
-        # Create metrics message
-        metrics_message = {
-            "type": "metrics_update",
-            "hostname": HOSTNAME,
-            "metrics": metrics,
-            "timestamp": datetime.now().isoformat()
-        }
-        
-        # Send metrics message
-        await websocket.send(json.dumps(metrics_message))
-        
-        # Calculate elapsed time
-        elapsed = time.time() - start_time
-        logger.info(f"Metrics sent successfully in {elapsed:.2f} seconds")
-        
-        return True
-    except websockets.exceptions.ConnectionClosed as e:
-        logger.error(f"WebSocket connection closed while sending metrics: {e}")
-        return False
-    except Exception as e:
-        logger.error(f"Error sending metrics: {e}")
-        # Don't immediately break connection for minor errors
-        return True
 
 async def monitor_system():
     """Main monitoring function"""
     reconnect_delay = 5  # seconds
     metrics_interval = 10  # seconds
     connection_attempts = 0
+    max_backoff = 60  # Maximum reconnect delay in seconds
+    
+    # Initial delay to allow system to fully boot before connecting
+    if os.path.exists("/.dockerenv"):
+        # We're in a container, no need to wait
+        initial_delay = 1
+    else:
+        # We're on a physical system, wait longer
+        initial_delay = 5
+    
+    logger.info(f"Starting monitor in {initial_delay} seconds...")
+    await asyncio.sleep(initial_delay)
     
     while True:
         try:
+            # Implement exponential backoff for reconnection attempts
+            if connection_attempts > 0:
+                # Calculate backoff time (min of 5 * 2^attempts and max_backoff)
+                current_delay = min(reconnect_delay * (2 ** (connection_attempts - 1)), max_backoff)
+                logger.info(f"Connection attempt {connection_attempts}, backing off for {current_delay} seconds")
+                await asyncio.sleep(current_delay)
+            
             connection_attempts += 1
             logger.info(f"Connecting to {WEBSOCKET_URL} (attempt {connection_attempts})...")
             
-            async with websockets.connect(WEBSOCKET_URL) as websocket:
-                logger.info("✅ WebSocket connection established")
-                connection_attempts = 0  # Reset counter on successful connection
-                
-                # First receive the welcome message if it exists
-                try:
-                    welcome = await asyncio.wait_for(websocket.recv(), timeout=1.0)
-                    welcome_data = json.loads(welcome)
-                    logger.info(f"Received initial message: {welcome_data}")
-                except (asyncio.TimeoutError, Exception) as e:
-                    logger.warning(f"No initial message received or error: {e}")
-                
-                # Register this host
-                registered = await register_host(websocket)
-                if not registered:
-                    logger.error("Failed to register host. Reconnecting...")
-                    await asyncio.sleep(reconnect_delay)
-                    continue
-                
-                # Start sending metrics
-                send_count = 0
-                while True:
-                    # Check if we can still send by trying a ping
+            try:
+                async with websockets.connect(WEBSOCKET_URL) as websocket:
+                    logger.info("✅ WebSocket connection established")
+                    connection_attempts = 0  # Reset counter on successful connection
+                    
+                    # First receive the welcome message if it exists
                     try:
+                        welcome = await asyncio.wait_for(websocket.recv(), timeout=1.0)
+                        welcome_data = json.loads(welcome)
+                        logger.info(f"Received initial message: {welcome_data}")
+                    except (asyncio.TimeoutError, Exception) as e:
+                        logger.warning(f"No initial message received or error: {e}")
+                    
+                    # Register this host
+                    registered = await register_host(websocket)
+                    if not registered:
+                        logger.error("Failed to register host. Will reconnect...")
+                        continue
+                    
+                    # Start sending metrics
+                    send_count = 0
+                    while True:
                         # Send metrics
                         send_count += 1
                         logger.debug(f"Sending metrics batch #{send_count}")
@@ -910,47 +714,51 @@ async def monitor_system():
                         
                         # Wait before sending next update
                         await asyncio.sleep(metrics_interval)
-                    except Exception as e:
-                        logger.error(f"Error in metrics loop: {e}")
-                        break
-                    
+            except websockets.exceptions.InvalidStatusCode as e:
+                logger.error(f"Invalid status code: {e.status_code}")
+                # If we get 404, the endpoint might be wrong - wait longer
+                if e.status_code == 404:
+                    await asyncio.sleep(30)
+            
         except websockets.exceptions.ConnectionClosed as e:
             logger.error(f"WebSocket connection closed: {e}")
+        except ConnectionRefusedError:
+            logger.error(f"Connection refused. Server might be down or unreachable.")
+        except OSError as e:
+            logger.error(f"Network error: {e}")
         except Exception as e:
             logger.error(f"Error in monitor_system: {e}", exc_info=True)
-        
-        # Wait before trying to reconnect
-        logger.info(f"Reconnecting in {reconnect_delay} seconds...")
-        await asyncio.sleep(reconnect_delay)
 
-# Replace the if __name__ == "__main__": block with this
+# Main entry point
 if __name__ == "__main__":
-    # Fill in your actual server address here
-    WEBSOCKET_URL = "ws://ghoest:8000/ws/system/metrics/"
+    # Parse command-line arguments
+    import argparse
+    parser = argparse.ArgumentParser(description="WyanData System Monitor Client")
+    parser.add_argument("--server", help="WebSocket server address (e.g., hostname:port)")
+    parser.add_argument("--debug", action="store_true", help="Enable debug logging")
+    args = parser.parse_args()
     
-    # Ensure we have the os module imported for temperature metrics
+    # Configure logging level
+    if args.debug:
+        logger.setLevel(logging.DEBUG)
+        websockets_logger = logging.getLogger('websockets')
+        websockets_logger.setLevel(logging.DEBUG)
+    
+    # Update server address if provided
+    if args.server:
+        WEBSOCKET_URL = f"ws://{args.server}/ws/system/metrics/"
+        logger.info(f"Using server address: {WEBSOCKET_URL}")
+    
+    # Ensure we have the required modules
     import os
     import glob
     
-    # Set up much more verbose logging to see exactly what's happening
-    logging.basicConfig(
-        level=logging.DEBUG,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        handlers=[
-            logging.FileHandler("monitor_debug.log"),
-            logging.StreamHandler(sys.stdout)
-        ]
-    )
-    logger = logging.getLogger('system_monitor_client')
-    
-    # Debug websockets library extensively
-    websockets_logger = logging.getLogger('websockets')
-    websockets_logger.setLevel(logging.DEBUG)
-    
     # Print startup banner
     print("\n" + "=" * 70)
-    print(f"  WyanData System Monitor Client v1.0 - DEBUG MODE")
+    print(f"  WyanData System Monitor Client")
     print(f"  Host: {HOSTNAME}")
+    print(f"  Server: {WEBSOCKET_URL}")
+    print(f"  Client ID: {CLIENT_ID}")
     print("=" * 70 + "\n")
     
     # Start the monitoring loop
