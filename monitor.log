@@ -1,0 +1,74 @@
+2025-04-23 14:27:30,764 - system_monitor_client - INFO - Generated and saved new client ID: ccbe0faf-a964-4247-a39d-ea644fd7fe00
+2025-04-23 14:27:30,767 - system_monitor_client - INFO - Starting monitor in 5 seconds...
+2025-04-23 14:27:35,770 - system_monitor_client - INFO - Connecting to ws://ghoest:8000/ws/system/metrics/ (attempt 1)...
+2025-04-23 14:27:35,824 - system_monitor_client - INFO - ✅ WebSocket connection established
+2025-04-23 14:27:35,824 - system_monitor_client - INFO - Received initial message: {'type': 'connection_established', 'message': 'Connected to system metrics. Please subscribe to specific hosts.'}
+2025-04-23 14:27:35,824 - system_monitor_client - INFO - Beginning host registration process for HPZ4...
+2025-04-23 14:27:35,824 - system_monitor_client - INFO - Collecting system information...
+2025-04-23 14:27:36,011 - system_monitor_client - INFO - Collecting storage device information...
+2025-04-23 14:27:36,040 - system_monitor_client - INFO - Collecting network interface information...
+2025-04-23 14:27:36,042 - system_monitor_client - INFO - Sending registration data to server
+2025-04-23 14:27:36,042 - system_monitor_client - INFO - Registration data sent successfully
+2025-04-23 14:27:36,043 - system_monitor_client - INFO - Waiting for server confirmation...
+2025-04-23 14:27:36,062 - system_monitor_client - INFO - Received response: registration_confirmed
+2025-04-23 14:27:36,062 - system_monitor_client - INFO - ✅ Host registration confirmed with ID: 0f1b541c-dd63-4912-8082-6bcf2ebe213f
+2025-04-23 14:27:37,067 - system_monitor_client - INFO - Sending 22 metrics (CPU: 1, MEMORY: 4, SYSTEM: 5, STORAGE: 8, NETWORK: 4)
+2025-04-23 14:27:37,069 - system_monitor_client - INFO - Metrics sent successfully in 1.01 seconds
+2025-04-23 14:27:48,077 - system_monitor_client - INFO - Sending 22 metrics (CPU: 1, MEMORY: 4, SYSTEM: 5, STORAGE: 8, NETWORK: 4)
+2025-04-23 14:27:48,078 - system_monitor_client - INFO - Metrics sent successfully in 1.01 seconds
+2025-04-23 14:27:59,085 - system_monitor_client - INFO - Sending 22 metrics (CPU: 1, MEMORY: 4, SYSTEM: 5, STORAGE: 8, NETWORK: 4)
+2025-04-23 14:27:59,086 - system_monitor_client - INFO - Metrics sent successfully in 1.00 seconds
+2025-04-23 14:28:10,094 - system_monitor_client - INFO - Sending 22 metrics (CPU: 1, MEMORY: 4, SYSTEM: 5, STORAGE: 8, NETWORK: 4)
+2025-04-23 14:28:10,095 - system_monitor_client - INFO - Metrics sent successfully in 1.01 seconds
+2025-04-23 14:28:21,099 - system_monitor_client - INFO - Sending 22 metrics (CPU: 1, MEMORY: 4, SYSTEM: 5, STORAGE: 8, NETWORK: 4)
+2025-04-23 14:28:21,100 - system_monitor_client - INFO - Metrics sent successfully in 1.00 seconds
+2025-04-23 14:28:32,114 - system_monitor_client - INFO - Sending 22 metrics (CPU: 1, MEMORY: 4, SYSTEM: 5, STORAGE: 8, NETWORK: 4)
+2025-04-23 14:28:32,115 - system_monitor_client - INFO - Metrics sent successfully in 1.01 seconds
+2025-04-23 14:28:43,124 - system_monitor_client - INFO - Sending 22 metrics (CPU: 1, MEMORY: 4, SYSTEM: 5, STORAGE: 8, NETWORK: 4)
+2025-04-23 14:28:43,125 - system_monitor_client - INFO - Metrics sent successfully in 1.01 seconds
+2025-04-23 14:28:54,137 - system_monitor_client - INFO - Sending 22 metrics (CPU: 1, MEMORY: 4, SYSTEM: 5, STORAGE: 8, NETWORK: 4)
+2025-04-23 14:28:54,138 - system_monitor_client - INFO - Metrics sent successfully in 1.00 seconds
+2025-04-23 14:29:06,056 - system_monitor_client - ERROR - Connection ping failed: sent 1011 (internal error) keepalive ping timeout; no close frame received
+2025-04-23 14:29:06,057 - system_monitor_client - INFO - Connecting to ws://ghoest:8000/ws/system/metrics/ (attempt 1)...
+2025-04-23 14:29:06,062 - system_monitor_client - INFO - ✅ WebSocket connection established
+2025-04-23 14:29:06,062 - system_monitor_client - INFO - Received initial message: {'type': 'connection_established', 'message': 'Connected to system metrics. Please subscribe to specific hosts.'}
+2025-04-23 14:29:06,063 - system_monitor_client - INFO - Beginning host registration process for HPZ4...
+2025-04-23 14:29:06,063 - system_monitor_client - INFO - Collecting system information...
+2025-04-23 14:29:06,289 - system_monitor_client - INFO - Collecting storage device information...
+2025-04-23 14:29:06,316 - system_monitor_client - INFO - Collecting network interface information...
+2025-04-23 14:29:06,317 - system_monitor_client - INFO - Sending registration data to server
+2025-04-23 14:29:06,318 - system_monitor_client - INFO - Registration data sent successfully
+2025-04-23 14:29:06,318 - system_monitor_client - INFO - Waiting for server confirmation...
+2025-04-23 14:29:06,333 - system_monitor_client - INFO - Received response: registration_confirmed
+2025-04-23 14:29:06,334 - system_monitor_client - INFO - ✅ Host registration confirmed with ID: 0f1b541c-dd63-4912-8082-6bcf2ebe213f
+2025-04-23 14:29:07,336 - system_monitor_client - INFO - Sending 22 metrics (CPU: 1, MEMORY: 4, SYSTEM: 5, STORAGE: 8, NETWORK: 4)
+2025-04-23 14:29:07,337 - system_monitor_client - INFO - Metrics sent successfully in 1.00 seconds
+2025-04-23 14:29:18,345 - system_monitor_client - INFO - Sending 22 metrics (CPU: 1, MEMORY: 4, SYSTEM: 5, STORAGE: 8, NETWORK: 4)
+2025-04-23 14:29:18,346 - system_monitor_client - INFO - Metrics sent successfully in 1.01 seconds
+2025-04-23 14:29:29,354 - system_monitor_client - INFO - Sending 22 metrics (CPU: 1, MEMORY: 4, SYSTEM: 5, STORAGE: 8, NETWORK: 4)
+2025-04-23 14:29:29,355 - system_monitor_client - INFO - Metrics sent successfully in 1.00 seconds
+2025-04-23 14:29:40,361 - system_monitor_client - INFO - Sending 22 metrics (CPU: 1, MEMORY: 4, SYSTEM: 5, STORAGE: 8, NETWORK: 4)
+2025-04-23 14:29:40,362 - system_monitor_client - INFO - Metrics sent successfully in 1.01 seconds
+2025-04-23 14:29:51,369 - system_monitor_client - INFO - Sending 22 metrics (CPU: 1, MEMORY: 4, SYSTEM: 5, STORAGE: 8, NETWORK: 4)
+2025-04-23 14:29:51,370 - system_monitor_client - INFO - Metrics sent successfully in 1.00 seconds
+2025-04-23 14:30:02,384 - system_monitor_client - INFO - Sending 22 metrics (CPU: 1, MEMORY: 4, SYSTEM: 5, STORAGE: 8, NETWORK: 4)
+2025-04-23 14:30:02,385 - system_monitor_client - INFO - Metrics sent successfully in 1.01 seconds
+2025-04-23 14:30:13,397 - system_monitor_client - INFO - Sending 22 metrics (CPU: 1, MEMORY: 4, SYSTEM: 5, STORAGE: 8, NETWORK: 4)
+2025-04-23 14:30:13,398 - system_monitor_client - INFO - Metrics sent successfully in 1.01 seconds
+2025-04-23 14:30:24,413 - system_monitor_client - INFO - Sending 22 metrics (CPU: 1, MEMORY: 4, SYSTEM: 5, STORAGE: 8, NETWORK: 4)
+2025-04-23 14:30:24,414 - system_monitor_client - INFO - Metrics sent successfully in 1.01 seconds
+2025-04-23 14:30:36,329 - system_monitor_client - ERROR - Connection ping failed: sent 1011 (internal error) keepalive ping timeout; no close frame received
+2025-04-23 14:30:36,330 - system_monitor_client - INFO - Connecting to ws://ghoest:8000/ws/system/metrics/ (attempt 1)...
+2025-04-23 14:30:36,335 - system_monitor_client - INFO - ✅ WebSocket connection established
+2025-04-23 14:30:36,335 - system_monitor_client - INFO - Received initial message: {'type': 'connection_established', 'message': 'Connected to system metrics. Please subscribe to specific hosts.'}
+2025-04-23 14:30:36,335 - system_monitor_client - INFO - Beginning host registration process for HPZ4...
+2025-04-23 14:30:36,335 - system_monitor_client - INFO - Collecting system information...
+2025-04-23 14:30:36,553 - system_monitor_client - INFO - Collecting storage device information...
+2025-04-23 14:30:36,583 - system_monitor_client - INFO - Collecting network interface information...
+2025-04-23 14:30:36,584 - system_monitor_client - INFO - Sending registration data to server
+2025-04-23 14:30:36,585 - system_monitor_client - INFO - Registration data sent successfully
+2025-04-23 14:30:36,585 - system_monitor_client - INFO - Waiting for server confirmation...
+2025-04-23 14:30:36,602 - system_monitor_client - INFO - Received response: registration_confirmed
+2025-04-23 14:30:36,602 - system_monitor_client - INFO - ✅ Host registration confirmed with ID: 0f1b541c-dd63-4912-8082-6bcf2ebe213f
+2025-04-23 14:30:37,606 - system_monitor_client - INFO - Sending 22 metrics (CPU: 1, MEMORY: 4, SYSTEM: 5, STORAGE: 8, NETWORK: 4)
+2025-04-23 14:30:37,607 - system_monitor_client - INFO - Metrics sent successfully in 1.00 seconds

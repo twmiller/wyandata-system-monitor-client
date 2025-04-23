@@ -393,11 +393,43 @@ async def collect_network_interfaces():
         net_if_addrs = psutil.net_if_addrs()
         net_if_stats = psutil.net_if_stats()
         
-        for interface_name, interface_addresses in net_if_addrs.items():
-            # Skip loopback interfaces
-            if interface_name.startswith('lo') or interface_name.startswith('veth'):
-                continue
+        # Get list of interfaces to skip based on OS
+        skip_interfaces = []
+        
+        # Common interfaces to skip
+        skip_prefixes = ['lo', 'veth']
+        
+        # macOS specific interfaces to skip
+        if platform.system() == 'Darwin':
+            # Skip common virtual interfaces on macOS
+            skip_prefixes.extend(['anpi', 'awdl', 'llw', 'utun', 'bridge', 'ap'])
             
+            # For macOS, we generally only want en0 (Wi-Fi) or en1 (Ethernet) that have IPs
+            primary_interfaces = ['en0', 'en1']
+            
+            # Create a list of interfaces with their details for logging
+            all_interfaces = []
+            for name, addrs in net_if_addrs.items():
+                has_ip = any(addr.family == socket.AF_INET for addr in addrs)
+                all_interfaces.append(f"{name} ({'with IP' if has_ip else 'no IP'})")
+            logger.debug(f"All available interfaces: {', '.join(all_interfaces)}")
+        
+        for interface_name, interface_addresses in net_if_addrs.items():
+            # Skip interfaces based on prefix
+            should_skip = any(interface_name.startswith(prefix) for prefix in skip_prefixes)
+            
+            # Special handling for macOS
+            if platform.system() == 'Darwin':
+                # On macOS, only include primary interfaces unless they have an IP
+                if interface_name not in primary_interfaces and not any(
+                    addr.family == socket.AF_INET for addr in interface_addresses
+                ):
+                    should_skip = True
+            
+            if should_skip:
+                logger.debug(f"Skipping network interface: {interface_name} (excluded prefix or type)")
+                continue
+                
             # Initialize interface info
             interface_info = {
                 "name": interface_name,
@@ -423,6 +455,13 @@ async def collect_network_interfaces():
                 logger.debug(f"Including network interface: {interface_name} with IP: {interface_info['ip_address']}")
             else:
                 logger.debug(f"Skipping network interface: {interface_name} (no IP address)")
+            
+        # Log summary of collected interfaces
+        if network_interfaces:
+            interfaces_summary = ", ".join([f"{i['name']} ({i['ip_address']})" for i in network_interfaces])
+            logger.info(f"Collected {len(network_interfaces)} network interfaces with IPs: {interfaces_summary}")
+        else:
+            logger.warning("No network interfaces with IP addresses found")
             
         return network_interfaces
     except Exception as e:
