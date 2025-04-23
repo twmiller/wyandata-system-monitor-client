@@ -95,65 +95,35 @@ sudo systemctl status system-monitor
 
 ## Temperature Sensor Troubleshooting
 
-The system monitor client attempts to read temperature data in multiple ways:
+### Diagnostic Process
 
-### For Ubuntu/Debian Systems:
+1. First, diagnose available temperature sources:
+   ```bash
+   python debug-temp-sensors.py > temperature-report.txt
+   ```
 
-1. Install the necessary packages:
+2. Review the report to understand what temperature sources are available on your system.
+
+3. Install necessary packages based on your findings:
    ```bash
    sudo apt-get update
    sudo apt-get install lm-sensors
    ```
 
-2. Detect and configure sensors:
+4. Configure sensors for your specific hardware:
    ```bash
    sudo sensors-detect --auto
    ```
 
-3. View available sensors:
-   ```bash
-   sensors
-   ```
+5. Only after confirming available temperature sources, modify the configuration.
 
-4. For HP workstations (Z240, Z4, etc.) running newer kernels:
-   ```bash
-   # Check if the k10temp module is available (AMD CPUs)
-   ls /lib/modules/$(uname -r)/kernel/drivers/hwmon/k10temp.ko*
+### HP Z-Series Workstation Notes (Ubuntu 24.04)
 
-   # Check if the intel_powerclamp module is available (Intel CPUs)
-   ls /lib/modules/$(uname -r)/kernel/drivers/thermal/intel/intel_powerclamp.ko*
+For HP Z240 workstations running Ubuntu 24.04 with newer kernels, there are several options:
 
-   # Load appropriate modules
-   sudo modprobe k10temp  # For AMD CPUs
-   sudo modprobe intel_powerclamp  # For Intel CPUs
-   ```
+1. The standard `coretemp` module might not be available in newer kernels
+2. Check for alternative temperature monitoring locations:
+   - `/sys/class/thermal/thermal_zone*/temp` (ACPI thermal sources)
+   - `/sys/class/hwmon/hwmon*/temp*_input` (Hardware monitoring interfaces)
 
-5. Run the diagnostic script to check your system:
-   ```bash
-   python debug-temp-sensors.py
-   ```
-
-6. Restart the service after making changes:
-   ```bash
-   systemctl --user restart system-monitor  # For user service
-   sudo systemctl restart system-monitor    # For system service
-   ```
-
-### Manual Configuration for HP Z240 (Ubuntu 24.04):
-
-If your system is using newer kernel modules:
-
-1. Create a custom temperature reading solution:
-   ```bash
-   sudo apt-get install lm-sensors
-   sudo sensors-detect --auto
-   ```
-
-2. Make sure appropriate modules are loaded (they may have different names than coretemp):
-   ```bash
-   # For Intel CPUs on newer kernels
-   sudo modprobe intel_powerclamp
-   echo "intel_powerclamp" | sudo tee -a /etc/modules
-   ```
-
-3. Use the debug script to identify available temperature sensors.
+3. For Z240 with Intel CPUs, you may need to use the thermal_zone interface instead of traditional sensors.

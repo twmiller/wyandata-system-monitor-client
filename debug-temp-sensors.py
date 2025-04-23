@@ -267,16 +267,28 @@ def check_proc_temperatures():
             print("No ThinkPad-specific thermal data available")
             
         # Check for other temperature sources in /proc
+        # Exclude IPv6 configuration which has "temp" in the name but is unrelated
         temp_files = []
         for root, dirs, files in os.walk("/proc"):
+            # Skip IPv6 configuration directories
+            if "ipv6/conf" in root:
+                continue
+                
             for file in files:
-                if "temp" in file.lower():
+                if "temp" in file.lower() and not file.startswith("temp_"):
                     temp_files.append(os.path.join(root, file))
         
         if temp_files:
-            print(f"\nFound {len(temp_files)} temperature-related files in /proc:")
+            print(f"\nFound {len(temp_files)} potential temperature-related files in /proc:")
             for file in temp_files[:10]:  # Limit to first 10 to avoid excessive output
                 print(f"  {file}")
+                try:
+                    with open(file, 'r') as f:
+                        content = f.read().strip()
+                        if len(content) < 100:  # Only print short content
+                            print(f"    Content: {content}")
+                except Exception:
+                    pass
         else:
             print("No temperature-related files found in /proc")
     except Exception as e:
