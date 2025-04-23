@@ -607,9 +607,14 @@ async def send_metrics(websocket):
         start_time = time.time()
         logger.debug(f"Collecting metrics for {HOSTNAME}...")
         
-        # Check if websocket is still open
-        if not websocket.open:
-            logger.error("WebSocket connection is closed, cannot send metrics")
+        # Check if websocket is still open using a safer method
+        try:
+            # Just use a simple check instead of accessing internal attributes
+            if websocket.closed:
+                logger.error("WebSocket connection is closed, cannot send metrics")
+                return False
+        except Exception as e:
+            logger.error(f"Error checking websocket status: {e}")
             return False
             
         # Collect metrics
@@ -683,6 +688,7 @@ async def monitor_system():
             logger.info(f"Connecting to {WEBSOCKET_URL} (attempt {connection_attempts})...")
             
             try:
+                # Wrap the whole connection handling in a more robust error handler
                 async with websockets.connect(WEBSOCKET_URL) as websocket:
                     logger.info("✅ WebSocket connection established")
                     connection_attempts = 0  # Reset counter on successful connection
@@ -703,22 +709,39 @@ async def monitor_system():
                     
                     # Start sending metrics
                     send_count = 0
+                    failure_count = 0
                     while True:
-                        # Send metrics
-                        send_count += 1
-                        logger.debug(f"Sending metrics batch #{send_count}")
-                        sent = await send_metrics(websocket)
-                        if not sent:
-                            logger.error(f"Failed to send metrics (attempt {send_count})")
+                        try:
+                            # Send metrics
+                            send_count += 1
+                            logger.debug(f"Sending metrics batch #{send_count}")
+                            
+                            # Try to send metrics and track failures
+                            sent = await send_metrics(websocket)
+                            if not sent:
+                                failure_count += 1
+                                logger.error(f"Failed to send metrics (failure {failure_count}/3)")
+                                
+                                # Break after 3 consecutive failures
+                                if failure_count >= 3:
+                                    logger.error("Too many consecutive failures, reconnecting...")
+                                    break
+                            else:
+                                # Reset failure count on success
+                                failure_count = 0
+                            
+                            # Wait before sending next update
+                            await asyncio.sleep(metrics_interval)
+                        except Exception as e:
+                            logger.error(f"Error in metrics sending loop: {e}")
                             break
-                        
-                        # Wait before sending next update
-                        await asyncio.sleep(metrics_interval)
             except websockets.exceptions.InvalidStatusCode as e:
                 logger.error(f"Invalid status code: {e.status_code}")
                 # If we get 404, the endpoint might be wrong - wait longer
                 if e.status_code == 404:
                     await asyncio.sleep(30)
+            except Exception as e:
+                logger.error(f"Error in connection handling: {e}")
             
         except websockets.exceptions.ConnectionClosed as e:
             logger.error(f"WebSocket connection closed: {e}")
@@ -728,6 +751,9 @@ async def monitor_system():
             logger.error(f"Network error: {e}")
         except Exception as e:
             logger.error(f"Error in monitor_system: {e}", exc_info=True)
+            
+            # Add a small delay before reconnecting after unexpected errors
+            await asyncio.sleep(5)
 
 # Main entry point
 if __name__ == "__main__":
