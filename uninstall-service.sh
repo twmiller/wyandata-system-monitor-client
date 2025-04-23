@@ -24,8 +24,9 @@ echo -e "${BLUE}${BOLD}==================================================${NC}"
 echo -e "${BLUE}${BOLD}    System Monitor - System Service Uninstaller    ${NC}"
 echo -e "${BLUE}${BOLD}==================================================${NC}"
 
-# Service file path
+# Service paths
 SERVICE_FILE="/etc/systemd/system/system-monitor.service"
+SERVICE_DIR="/opt/system-monitor"
 
 # Check if service exists
 if [ ! -f "$SERVICE_FILE" ]; then
@@ -34,10 +35,14 @@ if [ ! -f "$SERVICE_FILE" ]; then
     exit 0
 fi
 
+# Display current service configuration
+echo -e "\n${BOLD}Current Service Configuration:${NC}"
+systemctl status system-monitor.service --no-pager || true
+
 # Stop and disable the service
 echo -e "\n${BOLD}Stopping and disabling the service...${NC}"
-systemctl stop system-monitor.service
-systemctl disable system-monitor.service
+systemctl stop system-monitor.service || true
+systemctl disable system-monitor.service || true
 echo -e "${GREEN}✓ Service stopped and disabled${NC}"
 
 # Remove the service file
@@ -46,16 +51,31 @@ rm -f "$SERVICE_FILE"
 systemctl daemon-reload
 echo -e "${GREEN}✓ Service file removed${NC}"
 
-# Ask about removing the system user
-read -p "Do you want to remove the system user 'sysmonitor'? [y/N]: " REMOVE_USER
-REMOVE_USER=${REMOVE_USER:-N}
+# Check if service directory exists
+if [ -d "$SERVICE_DIR" ]; then
+    echo -e "\n${BOLD}Service directory found at $SERVICE_DIR${NC}"
+    read -p "Do you want to remove the service directory and all its contents? [y/N]: " REMOVE_DIR
+    REMOVE_DIR=${REMOVE_DIR:-N}
 
-if [[ "$REMOVE_USER" =~ ^[Yy]$ ]]; then
-    if id -u sysmonitor &>/dev/null; then
+    if [[ "$REMOVE_DIR" =~ ^[Yy]$ ]]; then
+        rm -rf "$SERVICE_DIR"
+        echo -e "${GREEN}✓ Service directory removed${NC}"
+    else
+        echo -e "${YELLOW}Keeping service directory${NC}"
+    fi
+fi
+
+# Ask about removing the system user
+if id -u sysmonitor &>/dev/null; then
+    echo -e "\n${BOLD}System user 'sysmonitor' exists${NC}"
+    read -p "Do you want to remove the system user 'sysmonitor'? [y/N]: " REMOVE_USER
+    REMOVE_USER=${REMOVE_USER:-N}
+
+    if [[ "$REMOVE_USER" =~ ^[Yy]$ ]]; then
         userdel sysmonitor
         echo -e "${GREEN}✓ System user 'sysmonitor' removed${NC}"
     else
-        echo -e "${YELLOW}User 'sysmonitor' not found${NC}"
+        echo -e "${YELLOW}Keeping system user 'sysmonitor'${NC}"
     fi
 fi
 
@@ -63,5 +83,4 @@ echo -e "\n${BLUE}${BOLD}==================================================${NC}
 echo -e "${GREEN}${BOLD}System Service Uninstallation Complete!${NC}"
 echo -e "${BLUE}${BOLD}==================================================${NC}"
 echo -e "\nThe System Monitor service has been completely removed."
-echo -e "The monitor script and virtual environment remain untouched."
-echo -e "To remove those as well, delete the script directory.\n"
+echo -e "To reinstall, use: ${YELLOW}sudo ./install-service.sh${NC}\n"

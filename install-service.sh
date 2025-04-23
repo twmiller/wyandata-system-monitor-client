@@ -53,18 +53,58 @@ if [ ! -f "$MONITOR_SCRIPT" ]; then
     exit 1
 fi
 
-# Create system user for the service if it doesn't exist
-echo -e "\n${BOLD}Setting up system user for the service...${NC}"
-if ! id -u sysmonitor &>/dev/null; then
-    useradd --system --no-create-home --shell /sbin/nologin sysmonitor
-    echo -e "${GREEN}✓ Created system user: sysmonitor${NC}"
-else
-    echo -e "${YELLOW}System user sysmonitor already exists${NC}"
-fi
+# Get the owner of the installation directory
+DIR_OWNER=$(stat -c '%U' "$SCRIPT_DIR")
+echo -e "Current directory owner: ${YELLOW}${DIR_OWNER}${NC}"
 
-# Make script directory readable by the service user
-chmod -R +r "$SCRIPT_DIR"
-echo -e "${GREEN}✓ Set permissions on script directory${NC}"
+# Ask if service should run as current user
+echo -e "\n${BOLD}System Service User Options:${NC}"
+echo -e "1. Run service as the current user (${YELLOW}${DIR_OWNER}${NC})"
+echo -e "2. Create a dedicated system user for the service"
+
+read -p "Select an option [1/2]: " USER_OPTION
+USER_OPTION=${USER_OPTION:-1}
+
+if [ "$USER_OPTION" == "1" ]; then
+    # Use current user
+    SERVICE_USER="$DIR_OWNER"
+    echo -e "\n${GREEN}✓ Will configure service to run as: ${SERVICE_USER}${NC}"
+    
+    # Make sure the script directory is fully owned by the user
+    chown -R "$SERVICE_USER" "$SCRIPT_DIR"
+else
+    # Create system user
+    echo -e "\n${BOLD}Setting up system user for the service...${NC}"
+    if ! id -u sysmonitor &>/dev/null; then
+        useradd --system --no-create-home --shell /sbin/nologin sysmonitor
+        echo -e "${GREEN}✓ Created system user: sysmonitor${NC}"
+    else
+        echo -e "${YELLOW}System user sysmonitor already exists${NC}"
+    fi
+    SERVICE_USER="sysmonitor"
+    
+    # Set appropriate permissions
+    echo -e "\n${BOLD}Setting directory permissions...${NC}"
+    
+    # Create a specific directory for the service
+    SERVICE_DIR="/opt/system-monitor"
+    mkdir -p "$SERVICE_DIR"
+    
+    # Copy necessary files
+    echo -e "Copying files to $SERVICE_DIR..."
+    cp "$MONITOR_SCRIPT" "$SERVICE_DIR/"
+    cp -r "$VENV_DIR" "$SERVICE_DIR/"
+    
+    # Update script paths
+    MONITOR_SCRIPT="$SERVICE_DIR/$(basename "$MONITOR_SCRIPT")"
+    VENV_DIR="$SERVICE_DIR/$(basename "$VENV_DIR")"
+    
+    # Set ownership
+    chown -R "$SERVICE_USER:$SERVICE_USER" "$SERVICE_DIR"
+    chmod -R 755 "$SERVICE_DIR"
+    
+    echo -e "${GREEN}✓ Service files copied to $SERVICE_DIR with correct permissions${NC}"
+fi
 
 # Create systemd service file
 echo -e "\n${BOLD}Creating systemd service...${NC}"
@@ -77,18 +117,21 @@ After=network.target
 
 [Service]
 Type=simple
-User=sysmonitor
-Group=sysmonitor
-ExecStart=$VENV_DIR/bin/python $MONITOR_SCRIPT
-WorkingDirectory=$SCRIPT_DIR
+User=${SERVICE_USER}
+EOF
+
+# Add group only if not using system user
+if [ "$USER_OPTION" == "1" ]; then
+    GROUP=$(id -gn "$SERVICE_USER")
+    echo "Group=${GROUP}" >> "$SERVICE_FILE"
+fi
+
+# Complete the service file
+cat >> "$SERVICE_FILE" << EOF
+ExecStart=${VENV_DIR}/bin/python ${MONITOR_SCRIPT}
+# WorkingDirectory directive removed to avoid permission issues
 Restart=on-failure
 RestartSec=10s
-
-# Security settings
-ProtectSystem=full
-ProtectHome=read-only
-PrivateTmp=true
-NoNewPrivileges=true
 
 [Install]
 WantedBy=multi-user.target
@@ -101,14 +144,19 @@ echo -e "\n${BOLD}Enabling and starting the service...${NC}"
 systemctl daemon-reload
 systemctl enable system-monitor.service
 systemctl start system-monitor.service
+sleep 2  # Give the service a moment to start
 
 # Check if service started successfully
 if systemctl is-active --quiet system-monitor.service; then
     echo -e "${GREEN}${BOLD}✓ Service successfully installed and started!${NC}"
 else
     echo -e "${RED}${BOLD}⚠ Service installation completed but service failed to start!${NC}"
-    echo -e "Check service status with: ${YELLOW}systemctl status system-monitor.service${NC}"
-    echo -e "Check logs with: ${YELLOW}journalctl -u system-monitor.service${NC}"
+    echo -e "${YELLOW}Showing service status:${NC}"
+    systemctl status system-monitor.service
+    echo -e "\n${YELLOW}Showing service logs:${NC}"
+    journalctl -u system-monitor.service --no-pager -n 20
+    echo
+    echo -e "${YELLOW}Please check the logs above for errors.${NC}"
 fi
 
 echo -e "\n${BLUE}${BOLD}==================================================${NC}"
@@ -119,4 +167,8 @@ echo -e "• Check service status: ${YELLOW}systemctl status system-monitor.serv
 echo -e "• View service logs: ${YELLOW}journalctl -u system-monitor.service${NC}"
 echo -e "• Start/stop service: ${YELLOW}systemctl [start|stop|restart] system-monitor.service${NC}"
 echo -e "• Disable service: ${YELLOW}systemctl disable system-monitor.service${NC}"
+echo -e "\nService configuration file: ${YELLOW}${SERVICE_FILE}${NC}"
+if [ "$USER_OPTION" == "2" ]; then
+    echo -e "Service files location: ${YELLOW}${SERVICE_DIR}${NC}"
+fi
 echo -e "\n"
