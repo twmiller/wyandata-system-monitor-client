@@ -10,6 +10,7 @@ import uuid
 import time
 import logging
 import re
+import sys
 import subprocess
 from datetime import datetime
 
@@ -705,6 +706,58 @@ async def register_host(websocket):
         
         # Wait for confirmation
         logger.info("Waiting for server confirmation...")
+        
+        # Set a reasonable timeout
+        max_wait_time = 5  # seconds
+        start_time = time.time()
+        
+        while time.time() - start_time < max_wait_time:
+            response = await websocket.recv()
+            response_data = json.loads(response)
+            
+            logger.info(f"Received response: {response_data.get('type')}")
+            
+            if response_data.get('type') == 'registration_confirmed':
+                logger.info(f"✅ Host registration confirmed with ID: {response_data.get('host_id')}")
+                return True
+        
+        logger.error(f"❌ Host registration timed out")
+        return False
+            
+    except Exception as e:
+        logger.error(f"❌ Error during host registration: {e}")
+        return False    
+    """Register the host with the monitoring server"""
+    try:
+        logger.info(f"Beginning host registration process for {HOSTNAME}...")
+        
+        # Collect system information
+        logger.info("Collecting system information...")
+        system_info = await collect_system_info()
+        
+        logger.info("Collecting storage device information...")
+        storage_devices = await collect_storage_devices()
+        
+        logger.info("Collecting network interface information...")
+        network_interfaces = await collect_network_interfaces()
+        
+        # Create registration message
+        registration_message = {
+            "type": "register_host",
+            "hostname": HOSTNAME,
+            "system_info": system_info,
+            "storage_devices": storage_devices,
+            "network_interfaces": network_interfaces,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        # Send registration message
+        logger.info(f"Sending registration data to server ({len(json.dumps(registration_message))} bytes)...")
+        await websocket.send(json.dumps(registration_message))
+        logger.info(f"Registration data sent successfully")
+        
+        # Wait for confirmation
+        logger.info("Waiting for server confirmation...")
         response = await websocket.recv()
         response_data = json.loads(response)
         
@@ -719,7 +772,55 @@ async def register_host(websocket):
         logger.error(f"❌ Error during host registration: {e}")
         return False
 
-# MODIFIED: Updated send_metrics function to be more resilient
+    try:
+        start_time = time.time()
+        logger.debug(f"Collecting metrics for {HOSTNAME}...")
+        
+        # Check if websocket is still open
+        if not websocket.open:
+            logger.error("WebSocket connection is closed, cannot send metrics")
+            return False
+            
+        # Collect metrics
+        metrics = await collect_metrics()
+        
+        # Count metrics by category
+        categories = {}
+        for key, metric in metrics.items():
+            category = metric.get("category", "OTHER")
+            if category not in categories:
+                categories[category] = 0
+            categories[category] += 1
+        
+        categories_str = ", ".join([f"{cat}: {count}" for cat, count in categories.items()])
+        logger.info(f"Sending {len(metrics)} metrics ({categories_str})")
+        
+        # Create metrics message
+        metrics_message = {
+            "type": "metrics_update",
+            "hostname": HOSTNAME,
+            "metrics": metrics,
+            "timestamp": datetime.now().isoformat()
+        }
+        
+        # Send metrics message
+        await websocket.send(json.dumps(metrics_message))
+        
+        # Calculate elapsed time
+        elapsed = time.time() - start_time
+        logger.info(f"Metrics sent successfully in {elapsed:.2f} seconds")
+        
+        return True
+    except websockets.exceptions.ConnectionClosed as e:
+        logger.error(f"WebSocket connection closed while sending metrics: {e.code}, {e.reason}")
+        return False
+    except Exception as e:
+        logger.error(f"Error sending metrics: {e}")
+        # Don't immediately break connection for minor errors
+        if isinstance(e, (websockets.exceptions.WebSocketException, ConnectionError)):
+            return False
+        return True
+    
 async def send_metrics(websocket):
     """Send metrics to the monitoring server"""
     try:
@@ -758,44 +859,107 @@ async def send_metrics(websocket):
         return True
     except websockets.exceptions.ConnectionClosed as e:
         logger.error(f"WebSocket connection closed while sending metrics: {e}")
-        # Return False to indicate that we need to reconnect
         return False
     except Exception as e:
         logger.error(f"Error sending metrics: {e}")
-        # MODIFIED: Continue the connection instead of breaking it for minor errors
-        # Return True to continue the main loop, unless it's a fatal error
-        return True  # Changed from False to True
-
-# NEW: Added heartbeat function
-async def send_heartbeat(websocket):
-    """Send heartbeat message to server"""
-    try:
-        heartbeat_message = {
-            "type": "heartbeat",
-            "hostname": HOSTNAME,
-            "timestamp": datetime.now().isoformat()
-        }
-        await websocket.send(json.dumps(heartbeat_message))
-        logger.debug("Heartbeat sent")
+        # Don't immediately break connection for minor errors
         return True
-    except Exception as e:
-        logger.error(f"Error sending heartbeat: {e}")
-        return False
 
-# NEW: Added keep-alive function using ping/pong frames
-async def keep_alive(websocket):
-    """Send ping frames to keep the connection alive"""
+async def monitor_system():
+    """Main monitoring function"""
+    reconnect_delay = 5  # seconds
+    metrics_interval = 10  # seconds
+    connection_attempts = 0
+    
     while True:
         try:
-            if websocket.open:
-                # Ping the server every 30 seconds
-                pong_waiter = await websocket.ping()
-                await pong_waiter
-                logger.debug("Ping/pong successful")
-            else:
-                logger.warning("WebSocket closed during keep_alive")
-                break
+            connection_attempts += 1
+            logger.info(f"Connecting to {WEBSOCKET_URL} (attempt {connection_attempts})...")
+            
+            async with websockets.connect(WEBSOCKET_URL) as websocket:
+                logger.info("✅ WebSocket connection established")
+                connection_attempts = 0  # Reset counter on successful connection
+                
+                # First receive the welcome message if it exists
+                try:
+                    welcome = await asyncio.wait_for(websocket.recv(), timeout=1.0)
+                    welcome_data = json.loads(welcome)
+                    logger.info(f"Received initial message: {welcome_data}")
+                except (asyncio.TimeoutError, Exception) as e:
+                    logger.warning(f"No initial message received or error: {e}")
+                
+                # Register this host
+                registered = await register_host(websocket)
+                if not registered:
+                    logger.error("Failed to register host. Reconnecting...")
+                    await asyncio.sleep(reconnect_delay)
+                    continue
+                
+                # Start sending metrics
+                send_count = 0
+                while True:
+                    # Check if we can still send by trying a ping
+                    try:
+                        # Send metrics
+                        send_count += 1
+                        logger.debug(f"Sending metrics batch #{send_count}")
+                        sent = await send_metrics(websocket)
+                        if not sent:
+                            logger.error(f"Failed to send metrics (attempt {send_count})")
+                            break
+                        
+                        # Wait before sending next update
+                        await asyncio.sleep(metrics_interval)
+                    except Exception as e:
+                        logger.error(f"Error in metrics loop: {e}")
+                        break
+                    
+        except websockets.exceptions.ConnectionClosed as e:
+            logger.error(f"WebSocket connection closed: {e}")
         except Exception as e:
-            logger.error(f"Error in keep_alive: {e}")
-            break
-        await asyncio.sleep(30)  # Send ping every 30 seconds
+            logger.error(f"Error in monitor_system: {e}", exc_info=True)
+        
+        # Wait before trying to reconnect
+        logger.info(f"Reconnecting in {reconnect_delay} seconds...")
+        await asyncio.sleep(reconnect_delay)
+
+# Replace the if __name__ == "__main__": block with this
+if __name__ == "__main__":
+    # Fill in your actual server address here
+    WEBSOCKET_URL = "ws://ghoest:8000/ws/system/metrics/"
+    
+    # Ensure we have the os module imported for temperature metrics
+    import os
+    import glob
+    
+    # Set up much more verbose logging to see exactly what's happening
+    logging.basicConfig(
+        level=logging.DEBUG,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler("monitor_debug.log"),
+            logging.StreamHandler(sys.stdout)
+        ]
+    )
+    logger = logging.getLogger('system_monitor_client')
+    
+    # Debug websockets library extensively
+    websockets_logger = logging.getLogger('websockets')
+    websockets_logger.setLevel(logging.DEBUG)
+    
+    # Print startup banner
+    print("\n" + "=" * 70)
+    print(f"  WyanData System Monitor Client v1.0 - DEBUG MODE")
+    print(f"  Host: {HOSTNAME}")
+    print("=" * 70 + "\n")
+    
+    # Start the monitoring loop
+    try:
+        asyncio.run(monitor_system())
+    except KeyboardInterrupt:
+        logger.info("Monitoring stopped by user")
+        print("\nMonitoring stopped. Thank you for using WyanData System Monitor!")
+    except Exception as e:
+        logger.error(f"Fatal error in monitoring loop: {e}", exc_info=True)
+        import traceback
+        traceback.print_exc()
