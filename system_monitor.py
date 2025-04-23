@@ -393,41 +393,19 @@ async def collect_network_interfaces():
         net_if_addrs = psutil.net_if_addrs()
         net_if_stats = psutil.net_if_stats()
         
-        # Get list of interfaces to skip based on OS
-        skip_interfaces = []
-        
-        # Common interfaces to skip
-        skip_prefixes = ['lo', 'veth']
-        
-        # macOS specific interfaces to skip
-        if platform.system() == 'Darwin':
-            # Skip common virtual interfaces on macOS
-            skip_prefixes.extend(['anpi', 'awdl', 'llw', 'utun', 'bridge', 'ap'])
-            
-            # For macOS, we generally only want en0 (Wi-Fi) or en1 (Ethernet) that have IPs
-            primary_interfaces = ['en0', 'en1']
-            
-            # Create a list of interfaces with their details for logging
-            all_interfaces = []
+        # Debug log all interfaces found
+        if logger.isEnabledFor(logging.DEBUG):
             for name, addrs in net_if_addrs.items():
-                has_ip = any(addr.family == socket.AF_INET for addr in addrs)
-                all_interfaces.append(f"{name} ({'with IP' if has_ip else 'no IP'})")
-            logger.debug(f"All available interfaces: {', '.join(all_interfaces)}")
+                ip_addr = next((addr.address for addr in addrs if addr.family == socket.AF_INET), "No IP")
+                mac_addr = next((addr.address for addr in addrs if getattr(addr, 'family', None) == psutil.AF_LINK), "No MAC")
+                is_up = name in net_if_stats and net_if_stats[name].isup
+                logger.debug(f"Found interface: {name}, IP: {ip_addr}, MAC: {mac_addr}, UP: {is_up}")
         
+        # Process interfaces - ONLY include those with IP addresses
         for interface_name, interface_addresses in net_if_addrs.items():
-            # Skip interfaces based on prefix
-            should_skip = any(interface_name.startswith(prefix) for prefix in skip_prefixes)
-            
-            # Special handling for macOS
-            if platform.system() == 'Darwin':
-                # On macOS, only include primary interfaces unless they have an IP
-                if interface_name not in primary_interfaces and not any(
-                    addr.family == socket.AF_INET for addr in interface_addresses
-                ):
-                    should_skip = True
-            
-            if should_skip:
-                logger.debug(f"Skipping network interface: {interface_name} (excluded prefix or type)")
+            # Skip loopback interfaces explicitly
+            if interface_name.startswith('lo') or interface_name.startswith('veth'):
+                logger.debug(f"Skipping loopback interface: {interface_name}")
                 continue
                 
             # Initialize interface info
@@ -438,24 +416,24 @@ async def collect_network_interfaces():
                 "is_up": interface_name in net_if_stats and net_if_stats[interface_name].isup
             }
             
-            # Check if this interface has an IP address
-            has_ip = False
-            
-            # Get interface details
+            # Get MAC address
             for addr in interface_addresses:
-                if addr.family == socket.AF_INET:
-                    interface_info['ip_address'] = addr.address
-                    has_ip = True
-                elif addr.family == psutil.AF_LINK:
+                if getattr(addr, 'family', None) == psutil.AF_LINK:
                     interface_info['mac_address'] = addr.address
             
-            # Only include interfaces with an IP address
-            if has_ip:
+            # Check if there's an IPv4 address assigned
+            ip_addresses = [addr.address for addr in interface_addresses if addr.family == socket.AF_INET]
+            
+            if ip_addresses:
+                # Use the first IPv4 address
+                interface_info['ip_address'] = ip_addresses[0]
+                
+                # Only append interfaces with IP addresses
                 network_interfaces.append(interface_info)
-                logger.debug(f"Including network interface: {interface_name} with IP: {interface_info['ip_address']}")
+                logger.info(f"Including network interface: {interface_name} with IP: {interface_info['ip_address']}")
             else:
                 logger.debug(f"Skipping network interface: {interface_name} (no IP address)")
-            
+        
         # Log summary of collected interfaces
         if network_interfaces:
             interfaces_summary = ", ".join([f"{i['name']} ({i['ip_address']})" for i in network_interfaces])
