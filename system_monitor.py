@@ -397,7 +397,8 @@ async def collect_network_interfaces():
             # Skip loopback interfaces
             if interface_name.startswith('lo') or interface_name.startswith('veth'):
                 continue
-                
+            
+            # Initialize interface info
             interface_info = {
                 "name": interface_name,
                 "mac_address": "",
@@ -405,13 +406,23 @@ async def collect_network_interfaces():
                 "is_up": interface_name in net_if_stats and net_if_stats[interface_name].isup
             }
             
+            # Check if this interface has an IP address
+            has_ip = False
+            
+            # Get interface details
             for addr in interface_addresses:
                 if addr.family == socket.AF_INET:
                     interface_info['ip_address'] = addr.address
+                    has_ip = True
                 elif addr.family == psutil.AF_LINK:
                     interface_info['mac_address'] = addr.address
             
-            network_interfaces.append(interface_info)
+            # Only include interfaces with an IP address
+            if has_ip:
+                network_interfaces.append(interface_info)
+                logger.debug(f"Including network interface: {interface_name} with IP: {interface_info['ip_address']}")
+            else:
+                logger.debug(f"Skipping network interface: {interface_name} (no IP address)")
             
         return network_interfaces
     except Exception as e:
