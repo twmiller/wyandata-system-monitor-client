@@ -138,7 +138,7 @@ if [ "$OS_TYPE" == "Linux" ]; then
     SYSTEMD_DIR="$HOME/.config/systemd/user"
     mkdir -p "$SYSTEMD_DIR"
     
-    # Create systemd service file
+    # Create systemd service file - properly using the virtual environment
     SERVICE_FILE="$SYSTEMD_DIR/system-monitor.service"
     cat > "$SERVICE_FILE" << EOF
 [Unit]
@@ -149,8 +149,11 @@ After=network.target
 Type=simple
 ExecStart=$VENV_DIR/bin/python $MONITOR_SCRIPT
 WorkingDirectory=$SCRIPT_DIR
+Environment="PATH=$VENV_DIR/bin:$PATH"
 Restart=on-failure
 RestartSec=10s
+StandardOutput=append:$HOME/system_monitor.log
+StandardError=append:$HOME/system_monitor.log
 
 [Install]
 WantedBy=default.target
@@ -158,64 +161,50 @@ EOF
 
     echo -e "${GREEN}✓ Created systemd service file: $SERVICE_FILE${NC}"
     
-    # Create a helper script for systemd service management
-    # This avoids the "Failed to connect to bus" error in some environments
+    # Create helper script for systemd service management (for environments where direct systemctl might fail)
     SYSTEMD_HELPER="$SCRIPT_DIR/manage_service.sh"
     cat > "$SYSTEMD_HELPER" << EOF
 #!/bin/bash
-# Helper script to manage the systemd service
+# Helper script for managing the system monitor service
 
 ACTION=\$1
+
 if [ -z "\$ACTION" ]; then
     echo "Usage: \$0 [start|stop|restart|status|enable|disable]"
     exit 1
 fi
 
 # Export XDG runtime dir if not set (helps with some SSH sessions)
-if [ -z "\$XDG_RUNTIME_DIR" ]; then
-    export XDG_RUNTIME_DIR="/run/user/\$(id -u)"
-fi
+export XDG_RUNTIME_DIR="/run/user/\$(id -u)"
 
-# Try to ensure DBUS session is available
-if [ -z "\$DBUS_SESSION_BUS_ADDRESS" ]; then
-    export DBUS_SESSION_BUS_ADDRESS="unix:path=\$XDG_RUNTIME_DIR/bus"
-fi
+# Try the systemd command first
+echo "Attempting systemd command: systemctl --user \$ACTION system-monitor.service"
+systemctl --user "\$ACTION" system-monitor.service
+RESULT=\$?
 
-# Run the systemd command
-systemctl --user \$ACTION system-monitor.service
-EXIT_CODE=\$?
-
-# If the command failed, try alternative methods
-if [ \$EXIT_CODE -ne 0 ]; then
-    echo "Standard systemctl command failed. Trying alternative method..."
+if [ \$RESULT -ne 0 ]; then
+    echo "Standard systemctl command failed. Using alternative method."
     
     case "\$ACTION" in
         start)
-            # Direct start as fallback
-            $VENV_DIR/bin/python $MONITOR_SCRIPT &
-            echo "Started service directly (PID: \$!)"
+            echo "Starting service directly..."
+            cd "$SCRIPT_DIR"
+            nohup "$VENV_DIR/bin/python" "$MONITOR_SCRIPT" > "$HOME/system_monitor.log" 2>&1 &
+            echo "Started service with PID: \$!"
             ;;
         stop)
-            # Find and kill the process
-            PID=\$(pgrep -f "$MONITOR_SCRIPT" || echo "")
-            if [ -n "\$PID" ]; then
-                kill \$PID 2>/dev/null || kill -9 \$PID 2>/dev/null
-                echo "Stopped service (PID: \$PID)"
-            else
-                echo "No running service found"
-            fi
+            echo "Stopping service directly..."
+            pkill -f "$MONITOR_SCRIPT" || echo "No running process found"
             ;;
         status)
-            # Check if process is running
-            PID=\$(pgrep -f "$MONITOR_SCRIPT" || echo "")
-            if [ -n "\$PID" ]; then
-                echo "Service is running (PID: \$PID)"
+            if pgrep -f "$MONITOR_SCRIPT" > /dev/null; then
+                echo "Service is running"
             else
                 echo "Service is not running"
             fi
             ;;
         *)
-            echo "Alternative method not implemented for '\$ACTION'"
+            echo "Alternative method not available for '\$ACTION'"
             ;;
     esac
 fi
@@ -224,29 +213,40 @@ EOF
     chmod +x "$SYSTEMD_HELPER"
     echo -e "${GREEN}✓ Created service management helper: $SYSTEMD_HELPER${NC}"
     
-    # Try to enable and start the service
-    echo -e "${YELLOW}Trying to enable and start systemd service...${NC}"
+    # Try to run systemctl commands or use manual methods
+    echo -e "\n${YELLOW}Configuring systemd service...${NC}"
     
-    # Try to run systemctl commands with error handling
+    # Always reload the daemon first
+    "$SYSTEMD_HELPER" stop >/dev/null 2>&1 || true
+    
     if systemctl --user daemon-reload 2>/dev/null; then
         echo -e "${GREEN}✓ Systemd daemon reloaded${NC}"
+        
+        if systemctl --user enable system-monitor.service 2>/dev/null; then
+            echo -e "${GREEN}✓ Service enabled${NC}"
+        else
+            echo -e "${YELLOW}Warning: Could not enable service with systemctl${NC}"
+        fi
+        
+        if systemctl --user start system-monitor.service 2>/dev/null; then
+            echo -e "${GREEN}✓ Service started${NC}"
+        else
+            echo -e "${YELLOW}Warning: Could not start service with systemctl. Starting manually...${NC}"
+            "$SYSTEMD_HELPER" start
+        fi
     else
-        echo -e "${YELLOW}Warning: Could not reload systemd daemon (this is normal in some environments)${NC}"
+        echo -e "${YELLOW}Warning: Systemd daemon reload failed. Starting service manually...${NC}"
+        "$SYSTEMD_HELPER" start
     fi
     
-    if systemctl --user enable system-monitor.service 2>/dev/null; then
-        echo -e "${GREEN}✓ Service enabled${NC}"
+    # Make sure lingering is enabled to run the service at boot time
+    if loginctl enable-linger "$(whoami)" 2>/dev/null; then
+        echo -e "${GREEN}✓ Lingering enabled for user (service will start at boot)${NC}"
     else
-        echo -e "${YELLOW}Warning: Could not enable service with systemctl (this is normal in some environments)${NC}"
+        echo -e "${YELLOW}Warning: Could not enable lingering. Service may not start at boot.${NC}"
+        echo -e "${YELLOW}Try running: ${BOLD}sudo loginctl enable-linger $(whoami)${NC}"
     fi
     
-    # Try to start the service, with fallback to direct execution
-    if systemctl --user start system-monitor.service 2>/dev/null; then
-        echo -e "${GREEN}✓ Service started${NC}"
-    else
-        echo -e "${YELLOW}Warning: Could not start service with systemctl. Starting directly...${NC}"
-        # Start the service directly as a fallback
-        nohup "$VENV_DIR/bin/python" "$MONITOR_SCRIPT" > "$HOME/system_monitor.log" 2>&1 &
         echo -e "${GREEN}✓ Service started directly (PID: $!)${NC}"
     fi
     
