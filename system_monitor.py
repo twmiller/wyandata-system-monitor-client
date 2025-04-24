@@ -53,7 +53,13 @@ CONFIG = read_config()
 # Get or generate a persistent client ID
 def get_client_id():
     try:
-        # First try to load existing client ID
+        # First check if client_id is defined in the config file
+        if CONFIG and 'system' in CONFIG and 'client_id' in CONFIG['system']:
+            client_id = CONFIG['system']['client_id']
+            logger.info(f"Using client ID from config file: {client_id}")
+            return client_id
+            
+        # If not in config, try to load existing client ID from file
         if os.path.exists(CLIENT_ID_FILE):
             with open(CLIENT_ID_FILE, 'r') as f:
                 client_id = f.read().strip()

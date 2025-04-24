@@ -8,12 +8,13 @@ import psutil
 import configparser
 import subprocess
 import re
+import uuid
 from pathlib import Path
 
 
 def is_valid_shortname(name):
-    """Check if the short name is valid (alphanumeric with underscores, no spaces)"""
-    return bool(re.match(r'^[a-zA-Z0-9_-]+$', name))
+    """Check if the short name is valid (allowing alphanumeric, spaces, underscores and hyphens)"""
+    return bool(re.match(r'^[a-zA-Z0-9_\- ]+$', name))
 
 
 def get_storage_devices():
@@ -146,13 +147,17 @@ def generate_config():
     print("\nThis utility will help you create a config.ini file for the system monitor.")
     print("This file will determine which devices are monitored and reported.")
     
+    # Generate a unique client ID
+    client_id = str(uuid.uuid4())
+    print(f"\nGenerated client ID: {client_id}")
+    
     # System Information
     while True:
-        short_name = input("\nEnter a short name for this system (letters, numbers, underscores only): ")
+        short_name = input("\nEnter a short name for this system (letters, numbers, spaces, underscores, hyphens allowed): ")
         if is_valid_shortname(short_name):
             break
         else:
-            print("Invalid short name. Please use only letters, numbers, underscores, and hyphens.")
+            print("Invalid short name. Please use only letters, numbers, spaces, underscores, and hyphens.")
     
     description = input("\nEnter a description for this system: ")
     
@@ -213,7 +218,8 @@ def generate_config():
     config['system'] = {
         'short_name': short_name,
         'description': description,
-        'hostname': socket.gethostname()
+        'hostname': socket.gethostname(),
+        'client_id': client_id
     }
     
     if selected_storage:
