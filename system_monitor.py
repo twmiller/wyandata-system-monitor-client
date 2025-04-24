@@ -748,21 +748,34 @@ async def register_host(websocket):
         logger.info("Collecting system information...")
         system_info = await collect_system_info()
         
+        # Get the fields we need to explicitly add at the root level
+        explicit_client_id = system_info.get("client_id", CLIENT_ID)
+        explicit_short_name = system_info.get("short_name", "")
+        explicit_description = system_info.get("description", "")
+        
         logger.info("Collecting storage device information...")
         storage_devices = await collect_storage_devices()
         
         logger.info("Collecting network interface information...")
         network_interfaces = await collect_network_interfaces()
         
-        # Create registration message
+        # Create registration message with explicit fields at root level
         registration_message = {
             "type": "register_host",
             "hostname": HOSTNAME,
+            "client_id": explicit_client_id,
+            "short_name": explicit_short_name,
+            "description": explicit_description,
             "system_info": system_info,
             "storage_devices": storage_devices,
             "network_interfaces": network_interfaces,
             "timestamp": datetime.now().isoformat()
         }
+        
+        # Log the exact message structure we're sending
+        logger.info(f"Registration message includes: client_id={registration_message['client_id']}, " +
+                   f"short_name='{registration_message['short_name']}', " +
+                   f"description='{registration_message['description']}'")
         
         # Send registration message
         logger.info(f"Sending registration data to server")
